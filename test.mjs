@@ -1,6 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import { build3D, findGroups } from './chem.js';
+import { resolveName } from './lookup.js';
 
 OCL.Resources.registerFromNodejs();
 
@@ -74,5 +75,16 @@ for (const [name, smi, want] of CASES) {
 // Highlight set for ethanol's alcohol: O, its carbon, and the O–H hydrogen (not the C–H ones).
 const eth = findGroups(OCL, build3D(OCL, 'CCO').mol)[0].atoms.length;
 if (eth !== 3) { fail++; console.log('FAIL ethanol highlight atoms:', eth, '(want 3)'); }
+// Name lookup: OPSIN rejects, PubChem is busy (503), then unreachable, then answers.
+const replies = [new Response('{}', { status: 404 }), new Response('', { status: 503 }), 'throw',
+  new Response(JSON.stringify({ PropertyTable: { Properties: [{ CID: 2244, SMILES: 'CC(=O)OC1=CC=CC=C1C(=O)O', Title: 'Aspirin' }] } }))];
+globalThis.fetch = async () => { const x = replies.shift(); if (x === 'throw') throw new TypeError('network'); return x; };
+let waits = 0;
+const hit = await resolveName('aspirin', async () => { waits++; });
+if (hit?.cid !== 2244 || waits !== 2) { fail++; console.log('FAIL PubChem retry:', hit, 'waits', waits); }
+globalThis.fetch = async () => new Response('', { status: 503 });
+const busy = await resolveName('aspirin', async () => {}).then(() => 'no error', e => e.message);
+if (!busy.startsWith('PubChem is busy')) { fail++; console.log('FAIL PubChem gives up:', busy); }
+
 console.log(fail ? `${fail} failed` : 'all passed');
 process.exit(fail ? 1 : 0);

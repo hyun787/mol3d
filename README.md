@@ -15,10 +15,11 @@ Type a compound name and see the molecule in 3D, with buttons for the functional
 - `app.js`: search, viewer, buttons
 - `worker.js`: 3D build and group search (OpenChemLib)
 - `chem.js`: functional-group list and the chemistry helpers
+- `lookup.js`: name → structure (OPSIN, then PubChem with retry)
 - `test.mjs`: self-check over ~50 molecules (`npm install && npm test`)
 
 ## Notes
 
 - A link like `…/mol3d/#caffeine` opens that molecule directly.
-- PubChem asks for no more than 5 requests per second per user. A whole class behind one school IP can hit that limit for a moment; the page then says PubChem is busy, and searching again a few seconds later works.
+- PubChem allows about 5 requests per second per source. A whole class behind one school IP can hit that together, so `lookup.js` retries a busy reply up to 3 times after a random wait, which spreads the requests out. Names OPSIN can parse never reach PubChem.
 - Molecules with large fused ring systems (steroids, taxol) take several seconds to build the first time.

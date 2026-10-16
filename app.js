@@ -1,4 +1,5 @@
 import { GROUPS } from './chem.js';
+import { resolveName } from './lookup.js';
 
 const $ = id => document.getElementById(id);
 const empty = $('empty'), q = $('q');
@@ -25,21 +26,6 @@ const build = smiles => new Promise(resolve => {
   pending = { id: ++token, resolve };
   worker.postMessage({ id: token, smiles });
 });
-
-// Name → SMILES. OPSIN parses systematic (IUPAC) names; PubChem covers common and trade names.
-async function resolveName(name) {
-  try {
-    const r = await fetch(`https://www.ebi.ac.uk/opsin/ws/${encodeURIComponent(name)}.json`);
-    const j = r.ok ? await r.json() : null;
-    if (j?.smiles) return { smiles: j.smiles, title: name, source: 'opsin' };
-  } catch { /* OPSIN down or name rejected: try PubChem */ }
-  const r = await fetch('https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/name/property/SMILES,IUPACName,Title/JSON',
-    { method: 'POST', body: new URLSearchParams({ name }) });
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(r.status === 503 ? 'PubChem is busy right now. Wait a few seconds and try again.' : `PubChem error (${r.status}).`);
-  const p = (await r.json()).PropertyTable.Properties[0];
-  return { smiles: p.SMILES, title: p.Title || name, iupac: p.IUPACName, cid: p.CID, source: 'pubchem' };
-}
 
 function styleFor(color) {
   const c = color ? { color } : { colorscheme: 'Jmol' };
