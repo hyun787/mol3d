@@ -9,7 +9,10 @@ Type a compound name and see the molecule in 3D, with buttons for the functional
 3. **Tabs, one per concept.**
    - **Structure:** buttons for the 21 functional groups in `chem.js` (SMARTS + a short explanation). Tap an atom to see its element, hybridization (textbook rule: a lone pair next to a π bond counts as sp²), lone pairs, and each bond angle measured on the model next to the ideal 109.5°/120°/180°.
    - **Kit:** the parts list for the Darling *Molecular Visions* kit, following Dr. Dan Berger's [guide](https://homepages.bluffton.edu/~bergerd/Models/visions.html) (Bluffton University). Aromatic rings count as one Kekulé structure. Parts the guide does not cover (halogens, S, P, C≡N, …) are listed to check against the kit.
-   - **Stereo:** E/Z for each stereo double bond (CIP rules), cis/trans for 1,2-disubstituted C=C, and cis/trans between substituted ring atoms. When the source structure leaves one open, the page says the 3D build picked it.
+   - **Stereo:** R/S for each stereocenter, E/Z for each stereo double bond (CIP rules), cis/trans for 1,2-disubstituted C=C, and cis/trans between substituted ring atoms. When the source structure leaves one open, the page says the 3D build picked it.
+     - Tap a stereocenter to see its CIP priorities (1–4) on the model, and turn the model so group 4 points away. The priorities come from `chem.js` (rules 1 and 2 on the hierarchical digraph, with duplicate atoms); a center is shown only when they give the same R/S as OpenChemLib. Pseudoasymmetric centers (r/s) and the rare centers that need rules 3–5 are left out.
+     - **Guess first** (off by default) hides R/S and the priorities: pick R or S to see the answer, or tap Hint to see the priorities and turn group 4 away first.
+     - **Mirror image** shows the reflected molecule beside the model, R and S swapped, and says whether the two are superimposable (enantiomers, or one meso compound).
 4. **Viewer.** [3Dmol.js](https://3dmol.org).
 
 ## Files
@@ -19,7 +22,7 @@ Type a compound name and see the molecule in 3D, with buttons for the functional
 - `worker.js`: 3D build and group search (OpenChemLib)
 - `chem.js`: functional-group list and the chemistry helpers
 - `lookup.js`: name → structure (OPSIN, then PubChem with retry)
-- `test.mjs`: self-check (`npm install && npm test`): functional groups over ~50 molecules, hybridization, lone pairs, bond angles, kit counts, and E/Z and ring cis/trans cross-checked against [RDKit](https://www.rdkit.org) (a test-only dependency)
+- `test.mjs`: self-check (`npm install && npm test`): functional groups over ~50 molecules, hybridization, lone pairs, bond angles, kit counts, hand-checked CIP priorities, and E/Z, ring cis/trans, R/S and mirror-image checks against [RDKit](https://www.rdkit.org) (a test-only dependency)
 
 ## Notes
 
