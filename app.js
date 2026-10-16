@@ -86,6 +86,8 @@ async function run(name) {
   q.value = name;
   const my = ++seq;
   $('go').disabled = true;
+  $('panel').hidden = $('foot').hidden = true; // don't leave the previous molecule's info next to a new error
+  $('name').textContent = name; $('formula').textContent = '';
   showEmpty('Looking up the name…');
   try {
     const hit = await resolveName(name);
