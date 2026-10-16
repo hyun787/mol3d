@@ -156,7 +156,8 @@ for (const [name, smi, want, nCheck] of KIT) {
 const RDKit = await initRDKit();
 const EZ = ['C/C=C\\C', 'C/C=C/C', 'OC(=O)/C=C\\C(=O)O', 'OC(=O)/C=C/C(=O)O', 'C/C(F)=C(/Cl)Br', 'C/C=N/O', 'C/C=N\\O',
   'CC(C)=CCC/C(C)=C/C=O', 'CC/C(C)=C\\C', 'CC/C(C(C)C)=C/C', 'OC/C(C)=C/C', 'C/C=C/C=C\\C', 'C1CCC/C=C\\CC1', 'OC(=O)/C=C/c1ccccc1',
-  'CC/C(=C(\\c1ccccc1)/c1ccc(OCCN(C)C)cc1)/c1ccccc1', 'F/C=C(\\Cl)Br', 'C/C=C/C(=O)O', 'BrC/C=C/CCl', 'N#C/C=C\\C#N'];
+  'CC/C(=C(\\c1ccccc1)/c1ccc(OCCN(C)C)cc1)/c1ccccc1', 'F/C=C(\\Cl)Br', 'C/C=C/C(=O)O', 'BrC/C=C/CCl', 'N#C/C=C\\C#N',
+  'C1CCC=CC1', 'CC1=CC[C@@H](CC1)C(=C)C']; // 6-ring C=C: no E/Z row
 for (const smi of EZ) {
   const { mol, given } = build3D(OCL, smi);
   const rd = RDKit.get_mol(smi);
@@ -266,6 +267,18 @@ const PRIO = [
   ['C[C@H]1CCCCC1=O', 1, [6, 2, 0, 'H'], '2-methylcyclohexanone: C=O side > CH2 side'],
   ['[2H][C@@H](C)O', 1, [3, 2, 0, 'H'], 'OH > CH3 > D > H (rule 2: mass)'],
 ];
+// First-sphere sets shown with the priorities: [SMILES, center, sets from priority 1 to 4]
+const SETS = [
+  ['C[C@@H](C(=O)O)N', 1, 'H,H | O,O,O | H,H,H | '], // alanine: N, COOH (C=O counts twice), CH3, H
+  ['C([C@H](C=O)O)O', 1, 'H | O,O,H | O,H,H | '], // glyceraldehyde: OH, CHO, CH2OH, H
+  ['C=C[C@H](C)CC', 2, 'C,C,H | C,H,H | H,H,H | '], // vinyl (duplicate C), ethyl, methyl, H
+];
+for (const [smi, c, want] of SETS) {
+  const { mol, given } = build3D(OCL, smi);
+  const got = stereo(OCL, mol, given).find(r => r.atom === c)?.sets.map(x => x.join()).join(' | ');
+  if (got !== want) fail++;
+  console.log(got === want ? 'ok  ' : 'FAIL', 'sets', smi.padEnd(22), got, got === want ? '' : `(want ${want})`);
+}
 for (const [smi, c, want, what] of PRIO) {
   const { mol } = build3D(OCL, smi);
   const got = (cipOrder(mol, c) || []).map(a => (a >= mol.getAtoms() ? 'H' : a));

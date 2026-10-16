@@ -153,7 +153,8 @@ function addLabels() {
 function showCenter() {
   const box = $('center-detail'), r = selCenter(), i = state.st, t = state.tries[i] || {};
   if (!r) { box.textContent = ''; return; }
-  const prio = `<ol class="prio" aria-label="CIP priorities">${r.order.map(a => `<li>${esc(groupName(a))}</li>`).join('')}</ol>`;
+  const prio = `<ol class="prio" aria-label="CIP priorities">${r.order.map((a, k) => `<li>${esc(cur.atoms[a].el + (r.sets[k].length ? ` (${r.sets[k].join(', ')})` : ''))}</li>`).join('')}</ol>`
+    + '<p class="small">In parentheses: the atoms on that first atom. A double bond counts twice.</p>';
   if (!revealed(i)) {
     box.innerHTML = (t.hint ? prio + '<p class="small">Group 4 now points away from you. Follow 1 → 2 → 3.</p>' : '')
       + '<div class="row"><button data-pick="R">R</button><button data-pick="S">S</button><button id="btn-hint">Hint</button></div>';

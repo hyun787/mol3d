@@ -216,11 +216,12 @@ export function stereo(OCL, mol, given) {
     if (![1, 2].includes(cip) || mol.isAtomParityPseudo(a) || nb.length !== 4) continue;
     const order = cipOrder(mol, a), rs = cip === 1 ? 'R' : 'S';
     if (!order || handedness(mol, a, order) !== rs) continue;
-    out.push({ kind: 'center', atom: a, atoms: [a, ...nb], rs, order, given: [1, 2].includes(given.atoms[a]) });
+    out.push({ kind: 'center', atom: a, atoms: [a, ...nb], rs, order, sets: order.map(b => firstSphere(mol, b, a)), given: [1, 2].includes(given.atoms[a]) });
   }
 
   for (let b = 0; b < mol.getAllBonds(); b++) {
     if (mol.getBondOrder(b) !== 2 || ![1, 2].includes(mol.getBondParity(b))) continue;
+    if (mol.isRingBond(b) && mol.getBondRingSize(b) < 8) continue; // OCL gives ring C=C a parity, but below 8 atoms only cis fits
     const [p, q] = [mol.getBondAtom(0, b), mol.getBondAtom(1, b)];
     const cip = mol.getBondCIPParity(b);
     const row = { kind: 'bond', atoms: [p, q, ...nbrs(mol, p), ...nbrs(mol, q)].filter((x, i, s) => s.indexOf(x) === i),
@@ -327,6 +328,16 @@ export function cipOrder(mol, center) {
     ligs.sort(cmp);
     return ligs.some((l, i) => i && !cmp(ligs[i - 1], l)) ? null : ligs.map(l => l.atom);
   } catch { return null; }
+}
+
+// The atoms on a group's first atom, as CIP compares them: highest atomic number first, a double bond counted twice.
+export function firstSphere(mol, b, center) {
+  const out = [];
+  for (let k = 0; k < mol.getAllConnAtoms(b); k++) {
+    const x = mol.getConnAtom(b, k);
+    if (x !== center) for (let i = 0; i < mol.getConnBondOrder(b, k); i++) out.push(x);
+  }
+  return out.sort((x, y) => mol.getAtomicNo(y) - mol.getAtomicNo(x)).map(x => mol.getAtomLabel(x));
 }
 
 // R or S from the 3D model: looking with group 4 pointing away, 1 → 2 → 3 clockwise is R.
