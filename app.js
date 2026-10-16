@@ -116,7 +116,7 @@ async function run(name) {
       + (res.stripped ? ' This is a salt or mixture, so only the largest part is shown.' : '')
       + (res.minimized ? '' : ' The force field does not cover every atom here, so bond lengths are approximate.');
     buildChips();
-    viewer.zoomTo(); draw(); home = viewer.getView();
+    viewer.resize(); viewer.zoomTo(); draw(); home = viewer.getView(); // resize: the stage may have changed size since the viewer was made
   } catch (e) {
     showEmpty(`<span class="err">${esc(e.message || 'The lookup failed. Check the connection and try again.')}</span>`);
   } finally {
