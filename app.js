@@ -55,8 +55,9 @@ function draw() {
     : cur.groups.length ? 'Tap a group to highlight it in the model.'
     : 'None of the 21 functional groups on our list are in this molecule.';
   document.querySelectorAll('#chips button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.hl)));
-  document.querySelectorAll('#stereo button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.st)));
+  document.querySelectorAll('#pane-stereo .rows button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.st)));
   showAtom();
+  addLabels();
   viewer.render();
 }
 
@@ -100,20 +101,38 @@ function groupName(g) {
   return a.el + (h ? 'H' + (h > 1 ? SUB(h) : '') : '') + (a.nbrs.length - h > 1 ? '–' : '');
 }
 
+// A stereocenter named by its groups in atom order (not priority order, so the name gives nothing away).
+function centerName(r) {
+  const nb = cur.atoms[r.atom].nbrs, isH = x => cur.atoms[x].el === 'H';
+  const names = [...nb.filter(x => !isH(x)), ...nb.filter(isH)].map(groupName);
+  return `${cur.atoms[r.atom].el} with ${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
+
 function buildStereo() {
-  const box = $('stereo');
-  box.textContent = '';
-  if (!cur.stereo.length) { box.innerHTML = '<p class="small">No double bond with E/Z isomers and no cis/trans ring pair in this molecule.</p>'; return; }
+  const centers = $('centers'), others = $('stereo');
+  centers.textContent = others.textContent = '';
   cur.stereo.forEach((r, i) => {
     const b = document.createElement('button');
-    const title = r.kind === 'bond'
-      ? `${r.label} double bond: ${r.ez || 'E/Z not assigned'}${r.ct ? ` (${r.ct})` : ''}`
+    const title = r.kind === 'center' ? `${centerName(r)}: ${r.rs}`
+      : r.kind === 'bond' ? `${r.label} double bond: ${r.ez || 'E/Z not assigned'}${r.ct ? ` (${r.ct})` : ''}`
       : `${groupName(r.groups[0])} and ${groupName(r.groups[1])} on a ${r.size}-membered ring: ${r.ct}`;
     b.innerHTML = `<span>${esc(title)}</span>` + (r.given ? '' : '<span class="sub">Not set in the source structure, so the 3D build picked this one.</span>');
     b.dataset.i = String(i);
     b.addEventListener('click', () => { state.st = state.st === i ? -1 : i; draw(); });
-    box.appendChild(b);
+    (r.kind === 'center' ? centers : others).appendChild(b);
   });
+  if (!centers.children.length) centers.innerHTML = '<p class="small">No stereocenter (R/S) in this molecule.</p>';
+  if (!others.children.length) others.innerHTML = '<p class="small">No double bond with E/Z isomers and no cis/trans ring pair in this molecule.</p>';
+}
+
+// R/S beside the selected stereocenter on the model.
+function addLabels() {
+  viewer.removeAllLabels();
+  const r = state.tab === 'stereo' && cur.stereo[state.st];
+  if (r?.kind !== 'center') return;
+  const [a] = viewer.selectedAtoms({ model: viewer.getModel(0), index: r.atom });
+  viewer.addLabel(r.rs, { position: a, alignment: 'bottomLeft', fontSize: 16, fontColor: tok('--bg'),
+    backgroundColor: tok('--accent'), backgroundOpacity: 0.95, inFront: true });
 }
 
 function showTab() {

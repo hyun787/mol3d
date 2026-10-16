@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder } from './chem.js';
 import { resolveName } from './lookup.js';
 
 OCL.Resources.registerFromNodejs();
@@ -192,6 +192,87 @@ for (const smi of RING) {
 }
 const openRing = stereo(OCL, build3D(OCL, 'CC1CCC(C)CC1').mol, build3D(OCL, 'CC1CCC(C)CC1').given);
 if (openRing.length !== 1 || openRing[0].given) { fail++; console.log('FAIL 1,4-dimethylcyclohexane without stereo should be marked open'); }
+
+// ---- R/S: every labeled center checked against RDKit's CIP labels (atoms by SMILES index), plus the textbook
+// answer where the name fixes it. A center is only labeled when our priorities give the same R/S as OCL on the
+// 3D model, so a passing row also checks the priorities. `skip` = centers RDKit labels that we leave out on purpose.
+const RS = [
+  ['L-alanine', 'C[C@@H](C(=O)O)N', 'S'],
+  ['(R)-2-butanol', 'C[C@@H](O)CC', 'R'],
+  ['(S)-2-butanol', 'C[C@H](O)CC', 'S'],
+  ['D-glyceraldehyde', 'C([C@H](C=O)O)O', 'R'],
+  ['L-serine', 'C([C@@H](C(=O)O)N)O', 'S'],
+  ['(R)-2-chlorobutane', 'CC[C@@H](C)Cl', 'R'],
+  ['(S)-2-chlorobutane', 'CC[C@H](C)Cl', 'S'],
+  ['L-lactic acid', 'C[C@@H](C(=O)O)O', 'S'],
+  ['(1R,2S,5R)-menthol', 'C[C@@H]1CC[C@H]([C@@H](C1)O)C(C)C', 'R S R'], // C5, C2, C1 in SMILES order
+  ['cholesterol', 'C[C@H](CCCC(C)C)[C@H]1CC[C@@H]2[C@@]1(CC[C@H]3[C@H]2CC=C4[C@@]3(CC[C@@H](C4)O)C)C', 'R R S R S S R S'], // C20 C17 C14 C13 C9 C8 C10 C3
+  ['cis-2-methylcyclohexanol', 'C[C@H]1CCCC[C@H]1O', ''],
+  ['trans-2-methylcyclohexanol', 'C[C@@H]1CCCC[C@H]1O', ''],
+  ['(2R,3R)-tartaric acid', '[C@@H]([C@H](C(=O)O)O)(C(=O)O)O', 'R R'],
+  ['meso-tartaric acid', 'O[C@H](C(=O)O)[C@@H](O)C(=O)O', ''],
+  ['3-methylpent-1-ene', 'C=C[C@H](C)CC', ''],
+  ['3,4-dimethylpent-1-ene', 'C=C[C@H](C)C(C)C', ''],
+  ['ethynyl vs tert-butyl', 'C#C[C@](C)(O)C(C)(C)C', ''],
+  ['phenyl vs tert-butyl', 'c1ccccc1[C@H](O)C(C)(C)C', ''],
+  ['(S)-1-deuterioethanol', '[2H][C@@H](C)O', 'S'],
+  ['beta-D-glucose', 'C([C@@H]1[C@H]([C@@H]([C@H]([C@@H](O1)O)O)O)O)O', 'R S S R R'],
+  ['(S)-ibuprofen', 'C[C@@H](C1=CC=C(C=C1)CC(C)C)C(=O)O', 'S'],
+  ['(1R,2S)-ephedrine', 'C[C@@H]([C@@H](C1=CC=CC=C1)O)NC', 'S R'], // C2 then C1
+  ['L-threonine', 'C[C@H]([C@@H](C(=O)O)N)O', 'R S'], // C3 then C2
+  ['L-isoleucine', 'CC[C@H](C)[C@@H](C(=O)O)N', 'S S'],
+  ['limonene', 'CC1=CC[C@@H](CC1)C(=C)C', ''],
+  ['camphor', 'C[C@@]12CC[C@@H](C1(C)C)CC2=O', ''],
+  ['(S)-nicotine', 'CN1CCC[C@H]1C2=CN=CC=C2', 'S'],
+  ['morphine', 'CN1CC[C@]23[C@@H]4[C@H]1CC5=C2C(=C(C=C5)O)O[C@H]3[C@H](C=C4)O', ''],
+  ['penicillin G', 'CC1([C@@H](N2[C@H](S1)[C@@H](C2=O)NC(=O)CC3=CC=CC=C3)C(=O)O)C', ''], // the ring N is not listed
+  ['taxol', 'CC1=C2[C@H](C(=O)[C@@]3([C@H](C[C@@H]4[C@]([C@H]3[C@@H]([C@@](C2(C)C)(C[C@@H]1OC(=O)[C@@H]([C@H](C5=CC=CC=C5)NC(=O)C6=CC=CC=C6)O)O)OC(=O)C7=CC=CC=C7)(CO4)OC(=O)C)O)C)OC(=O)C', ''],
+  ['strychnine', 'C1CN2CC3=CCO[C@H]4CC(=O)N5[C@H]6[C@H]4[C@H]3C[C@H]2[C@@]61C7=CC=CC=C75', ''],
+  ['ribaric acid (C3 is r/s)', 'O[C@H](C(=O)O)[C@H](O)[C@@H](O)C(=O)O', '', [5]],
+  ['an inositol (needs CIP rule 4)', 'O[C@@H]1[C@H](O)[C@@H](O)[C@H](O)[C@@H](O)[C@H]1O', '', [1, 2, 4, 6, 8, 10]],
+  ['cis-1,4-dimethylcyclohexane (r/s)', 'C[C@H]1CC[C@@H](C)CC1', ''],
+  ['penta-2,3-diene (axial)', 'C/C=C=C/C', ''],
+];
+for (const [name, smi, named, skip = []] of RS) {
+  const { mol, given } = build3D(OCL, smi);
+  const rd = RDKit.get_mol(smi);
+  const want = JSON.parse(rd.get_stereo_tags()).CIP_atoms.filter(([i, l]) => /[RS]/.test(l) && !skip.includes(i)).map(([i, l]) => i + l[1]).join(' ');
+  rd.delete();
+  const rows = stereo(OCL, mol, given).filter(r => r.kind === 'center');
+  const got = rows.map(r => r.atom + r.rs).join(' ');
+  const ok = got === want && rows.every(r => r.given) && (!named || rows.map(r => r.rs).join(' ') === named);
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'R/S', name.padEnd(34), got || '(none)', ok ? '' : `(RDKit: ${want || 'none'}${named ? `, name: ${named}` : ''})`);
+}
+// Left open in the SMILES: still labeled (the 3D build picked one), and marked as not given.
+const openRS = stereo(OCL, build3D(OCL, 'CC(O)CC').mol, build3D(OCL, 'CC(O)CC').given).filter(r => r.kind === 'center');
+if (openRS.length !== 1 || openRS[0].given) { fail++; console.log('FAIL 2-butanol without stereo should be one open center'); }
+
+// CIP priorities checked by hand: [SMILES, center, groups from 1 to 4 (atom index, or H)]
+const PRIO = [
+  ['C[C@@H](C(=O)O)N', 1, [5, 2, 0, 'H'], 'alanine: NH2 > COOH > CH3 > H'],
+  ['C([C@H](C=O)O)O', 1, [4, 2, 0, 'H'], 'glyceraldehyde: OH > CHO > CH2OH > H'],
+  ['C([C@@H](C(=O)O)N)O', 1, [5, 2, 0, 'H'], 'serine: NH2 > COOH > CH2OH > H'],
+  ['CC[C@@H](C)Cl', 2, [4, 1, 3, 'H'], '2-chlorobutane: Cl > ethyl > methyl > H'],
+  ['C[C@@H](C(=O)O)O', 1, [5, 2, 0, 'H'], 'lactic acid: OH > COOH > CH3 > H'],
+  ['C=C[C@H](C)CC', 2, [1, 4, 3, 'H'], 'vinyl > ethyl (duplicate C)'],
+  ['C=C[C@H](C)C(C)C', 2, [1, 4, 3, 'H'], 'vinyl > isopropyl (decided one sphere later)'],
+  ['C#C[C@](C)(O)C(C)(C)C', 2, [4, 1, 5, 3], 'OH > ethynyl > tert-butyl > CH3'],
+  ['c1ccccc1[C@H](O)C(C)(C)C', 6, [7, 5, 8, 'H'], 'OH > phenyl > tert-butyl > H'],
+  ['O=C[C@H](Cl)C(O)C', 2, [3, 1, 4, 'H'], 'Cl > CHO {O,O,H} > CH(OH)CH3 {O,C,H} > H'],
+  ['O[C@@H](CCBr)C(C)C', 1, [0, 5, 2, 'H'], 'isopropyl {C,C,H} > CH2CH2Br {C,H,H}: first point of difference'],
+  ['[C@@H](O)(CBr)C(C)C', 0, [1, 2, 4, 'H'], 'CH2Br {Br,H,H} > isopropyl {C,C,H}'],
+  ['C[C@H]1CCCC=C1', 1, [6, 2, 0, 'H'], '3-methylcyclohexene: ring CH= side > ring CH2 side'],
+  ['C[C@H]1CCCCC1=O', 1, [6, 2, 0, 'H'], '2-methylcyclohexanone: C=O side > CH2 side'],
+  ['[2H][C@@H](C)O', 1, [3, 2, 0, 'H'], 'OH > CH3 > D > H (rule 2: mass)'],
+];
+for (const [smi, c, want, what] of PRIO) {
+  const { mol } = build3D(OCL, smi);
+  const got = (cipOrder(mol, c) || []).map(a => (a >= mol.getAtoms() ? 'H' : a));
+  const ok = got.join() === want.join();
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'priority', what, ok ? '' : `(got ${got.join(' ')}, want ${want.join(' ')})`);
+}
 
 // Name lookup: OPSIN rejects, PubChem is busy (503), then unreachable, then answers.
 const replies = [new Response('{}', { status: 404 }), new Response('', { status: 503 }), 'throw',

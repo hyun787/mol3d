@@ -199,13 +199,25 @@ export function kitParts(mol) {
   return { n, check: Object.entries(check).map(([what, count]) => ({ what, count })) };
 }
 
-// ---- Stereo tab: double-bond E/Z and cis/trans, ring cis/trans ----
-// E/Z comes from OCL's CIP rules on the 3D model. cis/trans is read from the 3D geometry.
+// ---- Stereo tab: R/S stereocenters, double-bond E/Z and cis/trans, ring cis/trans ----
+// R/S and E/Z come from OCL's CIP rules on the 3D model. cis/trans is read from the 3D geometry.
 // `given` (from build3D) says whether the name or SMILES set each one, or the 3D build picked it.
 export function stereo(OCL, mol, given) {
   mol.ensureHelperArrays(OCL.Molecule.cHelperCIP);
   const isH = a => mol.getAtomicNo(a) === 1;
   const out = [];
+
+  // Stereocenters with 4 neighbors (3-neighbor N, S, P and the allene middle carbon are left out).
+  // A center is listed only when our own CIP ranking (cipOrder) separates all 4 groups AND gives the same R/S as OCL
+  // on this 3D model. That drops pseudoasymmetric centers (r/s: two groups differ only in configuration, which
+  // OCL sometimes labels R/S anyway) and the rare centers that need CIP rules 3–5.
+  for (let a = 0; a < mol.getAtoms(); a++) {
+    const cip = mol.getAtomCIPParity(a), nb = nbrs(mol, a);
+    if (![1, 2].includes(cip) || mol.isAtomParityPseudo(a) || nb.length !== 4) continue;
+    const order = cipOrder(mol, a), rs = cip === 1 ? 'R' : 'S';
+    if (!order || handedness(mol, a, order) !== rs) continue;
+    out.push({ kind: 'center', atom: a, atoms: [a, ...nb], rs, order, given: [1, 2].includes(given.atoms[a]) });
+  }
 
   for (let b = 0; b < mol.getAllBonds(); b++) {
     if (mol.getBondOrder(b) !== 2 || ![1, 2].includes(mol.getBondParity(b))) continue;
@@ -246,6 +258,81 @@ export function stereo(OCL, mol, given) {
     }
   }
   return out;
+}
+
+// ---- CIP priorities: rule 1a (atomic number), then rule 2 (mass), on the hierarchical digraph ----
+// Each group is explored sphere by sphere from the center, set by set in order of rank. A double bond gives each end
+// a duplicate of the other end; a ring closure gives a duplicate of the atom the path returns to. Duplicates carry
+// only phantom atoms (atomic number 0), the same as a missing entry here, and so do lone pairs.
+// shortcut: rules 1b and 3–5 are not implemented; a tie they would break leaves the center out (cipOrder → null).
+// shortcut: aromatic rings use OCL's Kekulé bonds; IUPAC averages duplicates over Kekulé structures, which only
+// changes heteroaromatic rings. Add that if a pyridine-type case ever disagrees with RDKit in test.mjs.
+const MASS = { 1: 1.008, 6: 12.011, 7: 14.007, 8: 15.999, 9: 18.998, 14: 28.085, 15: 30.974, 16: 32.06, 17: 35.45, 35: 79.904, 53: 126.904 };
+const PHANTOM = { phantom: true, kids: [[], [], []] };
+
+// Returns the 4 neighbor atoms of `center` from priority 1 to 4, or null when two of them tie.
+export function cipOrder(mol, center) {
+  let budget = 100000; // digraph nodes: a huge ring system gives up instead of freezing the page
+  const iso = Array.from({ length: mol.getAllAtoms() }, (_, a) => mol.getAtomMass(a)).some(Boolean);
+  const z = n => (n.phantom ? 0 : mol.getAtomicNo(n.atom));
+  const mass = n => (n.phantom ? 0 : mol.getAtomMass(n.atom) || MASS[z(n)] || z(n));
+  const keys = [null, z, n => z(n) + mass(n) / 1000]; // pass 2: same atomic numbers, then mass
+  const node = (atom, parent, dup) => {
+    if (--budget < 0) throw new Error('digraph too large');
+    return { atom, parent, dup, kids: [] };
+  };
+  const onPath = (n, b) => { for (let p = n; p; p = p.parent) if (p.atom === b) return true; return false; };
+
+  // Children of a node, sorted from highest to lowest rank under rule `r` (pass 2 sorts by rule 1 first).
+  const kids = (n, r) => {
+    if (n.kids[r]) return n.kids[r];
+    let out = n.kids[1] || n.kids[2];
+    if (!out) {
+      out = [];
+      if (!n.dup) for (let k = 0; k < mol.getAllConnAtoms(n.atom); k++) {
+        const b = mol.getConnAtom(n.atom, k), order = mol.getConnBondOrder(n.atom, k);
+        const back = b === n.parent.atom;
+        if (!back) out.push(node(b, n, onPath(n.parent, b)));
+        for (let i = 1; i < order; i++) out.push(node(b, n, true));
+      }
+    }
+    return n.kids[r] = [...out].sort((x, y) => rank(y, x, 1) || (r === 2 ? rank(y, x, 2) : 0));
+  };
+
+  // > 0 when node a outranks node b. Compares sphere by sphere; within a sphere, set by set in branch order.
+  const rank = (a, b, r) => {
+    const key = keys[r];
+    let d = key(a) - key(b);
+    if (d) return d;
+    let A = [a], B = [b];
+    while (A.length) {
+      const nA = [], nB = [];
+      for (let i = 0; i < A.length; i++) {
+        const ka = kids(A[i], r), kb = kids(B[i], r);
+        for (let j = 0; j < Math.max(ka.length, kb.length); j++) {
+          const x = ka[j] || PHANTOM, y = kb[j] || PHANTOM;
+          if ((d = key(x) - key(y))) return d;
+          nA.push(x); nB.push(y);
+        }
+      }
+      A = nA; B = nB;
+    }
+    return 0;
+  };
+
+  try {
+    const root = { atom: center, parent: null };
+    const ligs = nbrs(mol, center).map(b => node(b, root, false));
+    const cmp = (x, y) => rank(y, x, 1) || (iso ? rank(y, x, 2) : 0);
+    ligs.sort(cmp);
+    return ligs.some((l, i) => i && !cmp(ligs[i - 1], l)) ? null : ligs.map(l => l.atom);
+  } catch { return null; }
+}
+
+// R or S from the 3D model: looking with group 4 pointing away, 1 → 2 → 3 clockwise is R.
+export function handedness(mol, center, order) {
+  const [v1, v2, v3, v4] = order.map(b => pos(mol, b));
+  return dot(sub(v1, v4), cross(sub(v2, v4), sub(v3, v4))) < 0 ? 'R' : 'S';
 }
 
 function dihedral(mol, a, b, c, d) {
