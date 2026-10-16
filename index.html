@@ -184,9 +184,11 @@ footer a { color: inherit; }
           <div class="label">Bond rotation (Newman)</div>
           <div class="rows" role="group" aria-label="Look down a C–C bond" id="bonds"></div>
           <div class="group" id="newman" hidden>
+            <div class="row"><button id="btn-sguess" aria-pressed="false">Guess first</button></div>
             <label class="facts" for="phi" id="phi-out"></label>
             <input id="phi" type="range" min="0" max="355" step="5">
             <p class="facts" id="conf" aria-live="polite"></p>
+            <div id="shape-guess" aria-live="polite"></div>
             <div id="curve"></div>
             <p class="small" id="curve-note"></p>
             <p class="small">You look straight down the bond, and the front carbon is closest to you. The slider turns the back carbon. Staggered: the back bonds sit between the front bonds. Eclipsed: they line up behind them. Anti: the two groups point opposite ways (180°). Gauche: they sit 60° apart.</p>

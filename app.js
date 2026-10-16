@@ -4,7 +4,7 @@ import { resolveName } from './lookup.js';
 const $ = id => document.getElementById(id);
 const empty = $('empty'), q = $('q');
 // guess: the guess-first mode; tries[i] = { pick: 'R' | 'S', hint: true } for stereo row i in that mode
-const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false, bond: -1, phi: 0 };
+const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false, bond: -1, phi: 0, sguess: false, stries: {} };
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -156,11 +156,26 @@ function showNewman() {
   $('phi').value = String(state.phi);
   $('conf').innerHTML = !c.kind ? 'In between: neither staggered nor eclipsed.'
     : `<b>${c.kind === 'staggered' ? 'Staggered' : 'Eclipsed'}</b>` + (c.rel ? ` · ${esc(p)} and ${esc(q)} are <b>${c.rel}</b>` : '');
-  $('curve').innerHTML = b.levels ? curveSVG(b, `${p}–C–C–${q}`) : '';
-  $('curve-note').textContent = b.levels
+  // Guess first: the curve stays hidden until the student turns to the form they think is least stable and taps.
+  const guessing = state.sguess && b.levels, open = !guessing || state.bond in state.stries, top = b.levels && Math.max(...b.levels);
+  $('btn-sguess').hidden = !b.levels;
+  $('shape-guess').innerHTML = !guessing ? ''
+    : !open ? '<p class="facts">Turn the back carbon to the least stable form, then tap the button.</p><div class="row"><button id="btn-pick">This one is least stable</button></div>'
+    : state.stries[state.bond] ? `<p class="facts">Right: the least stable form is at <b>${anglesAt(b.levels, top)}</b>.</p>`
+    : `<p class="facts">Not quite: the least stable form is at <b>${anglesAt(b.levels, top)}</b>, the highest point on the curve.</p>`;
+  $('btn-pick')?.addEventListener('click', () => {
+    const k = conformer(state.phi, b.ref);
+    state.stries[state.bond] = !!k.kind && b.levels[k.at / 60] === top;
+    draw();
+  });
+  $('curve').innerHTML = b.levels && open ? curveSVG(b, `${p}–C–C–${q}`) : '';
+  $('curve-note').textContent = !open ? '' : b.levels
     ? 'Schematic: the curve shows which forms are higher in energy, not by how much. It follows the textbook rule: eclipsed forms sit above staggered ones, and each pair of carbon groups that is eclipsed or gauche raises the energy. Tap the curve to turn to that angle.'
     : 'No curve for this bond. Groups other than H and sp³ carbon (Cl, O, N, F, or a C=C or C=O carbon) bring in polarity and other effects that can change which form is lowest: 1,2-difluoroethane, for example, prefers gauche. Staggered forms are still usually lower than eclipsed ones.';
 }
+
+// The angles among 0°, 60° … 300° whose form has order r, as an English list.
+const anglesAt = (lv, r) => new Intl.ListFormat('en').format([0, 60, 120, 180, 240, 300].filter((_, i) => lv[i] === r).map(d => d + '°'));
 
 // Schematic energy vs. dihedral (no numbers): the six forms at 0°, 60° … 300° placed by their order, staggered in the low
 // band and eclipsed in the high band, joined by half-cosine curves. The dot is the slider angle.
@@ -174,10 +189,9 @@ function curveSVG(b, name) {
   const E = phi => { const i = Math.floor(phi / 60) % 6, t = (phi % 60) / 60, a = y6[i], c = y6[(i + 1) % 6]; return a + (c - a) * (1 - Math.cos(Math.PI * t)) / 2; };
   const X = phi => CL + w * phi / 360, Y = e => CT + h * (1 - e);
   const line = Array.from({ length: 73 }, (_, k) => `${X(5 * k).toFixed(1)},${Y(E(5 * k)).toFixed(1)}`).join(' ');
-  const at = r => new Intl.ListFormat('en').format([0, 60, 120, 180, 240, 300].filter((_, i) => lv[i] === r).map(d => d + '°'));
   const ticks = [0, 60, 120, 180, 240, 300, 360].map(d => `<line x1="${X(d)}" x2="${X(d)}" y1="${CT + h}" y2="${CT + h + 4}" stroke="var(--muted)"/>`
     + `<text x="${X(d)}" y="${CH - 6}" text-anchor="middle">${d}°</text>`).join('');
-  return `<svg viewBox="0 0 ${CW} ${CH}" role="img" aria-label="${esc(`Schematic energy curve for the ${name} dihedral. Least stable at ${at(Math.max(...lv))}; most stable at ${at(0)}.`)}">
+  return `<svg viewBox="0 0 ${CW} ${CH}" role="img" aria-label="${esc(`Schematic energy curve for the ${name} dihedral. Least stable at ${anglesAt(lv, Math.max(...lv))}; most stable at ${anglesAt(lv, 0)}.`)}">
     <g font-family="var(--mono)" font-size="10" fill="var(--muted)">${ticks}
       <text transform="translate(10 ${CT + h / 2}) rotate(-90)" text-anchor="middle">Energy →</text></g>
     <line x1="${CL}" x2="${CL + w}" y1="${CT + h}" y2="${CT + h}" stroke="var(--line)"/>
@@ -373,7 +387,7 @@ async function run(name) {
 
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })) };
-    state.hl = state.atom = state.st = state.bond = -1; state.tries = {};
+    state.hl = state.atom = state.st = state.bond = -1; state.tries = {}; state.stries = {};
     if (state.mirror) setMirror(false, false);
     viewer.removeAllModels();
     viewer.addModel(res.molfile, 'sdf', { keepH: true });
@@ -443,6 +457,11 @@ $('btn-guess').addEventListener('click', e => {
   state.guess = !state.guess; state.tries = {};
   e.currentTarget.setAttribute('aria-pressed', String(state.guess));
   buildStereo(); draw();
+});
+$('btn-sguess').addEventListener('click', e => {
+  state.sguess = !state.sguess; state.stries = {};
+  e.currentTarget.setAttribute('aria-pressed', String(state.sguess));
+  draw();
 });
 $('btn-reset').addEventListener('click', () => {
   if (!home) return;
