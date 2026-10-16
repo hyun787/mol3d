@@ -159,6 +159,9 @@ footer a { color: inherit; }
       <div class="pane" id="pane-stereo" role="tabpanel" aria-labelledby="tab-stereo" hidden>
         <div class="group">
           <div class="label">Stereocenters (R/S)</div>
+          <div class="row" id="center-tools" hidden>
+            <button id="btn-guess" aria-pressed="false">Guess first</button>
+          </div>
           <div class="rows" role="group" aria-label="Highlight a stereocenter" id="centers"></div>
           <div id="center-detail" aria-live="polite"></div>
           <p class="small">R/S uses the CIP priority rules. Point group 4 away from you: 1 → 2 → 3 clockwise is R, counterclockwise is S.</p>

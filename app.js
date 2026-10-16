@@ -3,7 +3,8 @@ import { resolveName } from './lookup.js';
 
 const $ = id => document.getElementById(id);
 const empty = $('empty'), q = $('q');
-const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1 };
+// guess: the guess-first mode; tries[i] = { pick: 'R' | 'S', hint: true } for stereo row i in that mode
+const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {} };
 let cur = null, home = null, token = 0, seq = 0;
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -114,7 +115,7 @@ function buildStereo() {
   centers.textContent = others.textContent = '';
   cur.stereo.forEach((r, i) => {
     const b = document.createElement('button');
-    const title = r.kind === 'center' ? `${centerName(r)}: ${r.rs}`
+    const title = r.kind === 'center' ? `${centerName(r)}: ${revealed(i) ? r.rs : '?'}`
       : r.kind === 'bond' ? `${r.label} double bond: ${r.ez || 'E/Z not assigned'}${r.ct ? ` (${r.ct})` : ''}`
       : `${groupName(r.groups[0])} and ${groupName(r.groups[1])} on a ${r.size}-membered ring: ${r.ct}`;
     b.innerHTML = `<span>${esc(title)}</span>` + (r.given ? '' : '<span class="sub">Not set in the source structure, so the 3D build picked this one.</span>');
@@ -123,10 +124,12 @@ function buildStereo() {
     (r.kind === 'center' ? centers : others).appendChild(b);
   });
   if (!centers.children.length) centers.innerHTML = '<p class="small">No stereocenter (R/S) in this molecule.</p>';
+  $('center-tools').hidden = !centers.querySelector('button');
   if (!others.children.length) others.innerHTML = '<p class="small">No double bond with E/Z isomers and no cis/trans ring pair in this molecule.</p>';
 }
 
 const selCenter = () => { const r = state.tab === 'stereo' && cur.stereo[state.st]; return r?.kind === 'center' ? r : null; };
+const revealed = i => !state.guess || !!state.tries[i]?.pick;
 const atomAt = i => viewer.getModel(0).selectedAtoms({ index: i })[0];
 
 // On the model: R/S beside the selected stereocenter, and 1–4 on its groups.
@@ -134,19 +137,33 @@ function addLabels() {
   viewer.removeAllLabels();
   const r = selCenter();
   if (!r) return;
+  const show = revealed(state.st);
+  if (!show && !state.tries[state.st]?.hint) return;
   // R/S sits up and to the right of the center, so it stays readable when group 4 is right behind the center
-  viewer.addLabel(r.rs, { position: atomAt(r.atom), alignment: 'bottomLeft', screenOffset: { x: 10, y: 10 }, fontSize: 18,
+  if (show) viewer.addLabel(r.rs, { position: atomAt(r.atom), alignment: 'bottomLeft', screenOffset: { x: 10, y: 10 }, fontSize: 18,
     bold: true, fontColor: tok('--bg'), backgroundColor: tok('--accent'), backgroundOpacity: 1, inFront: true });
   r.order.forEach((a, k) => viewer.addLabel(String(k + 1), { position: atomAt(a), alignment: 'center', fontSize: 15,
     bold: true, fontColor: tok('--bg'), backgroundColor: tok('--fg'), backgroundOpacity: 1, inFront: true }));
 }
 
 // Below the stereocenter rows: the priorities of the selected one and the turn button.
+// In guess mode an open center shows only R / S / Hint; picking either one opens the answer.
 function showCenter() {
-  const box = $('center-detail'), r = selCenter();
+  const box = $('center-detail'), r = selCenter(), i = state.st, t = state.tries[i] || {};
   if (!r) { box.textContent = ''; return; }
-  box.innerHTML = `<ol class="prio" aria-label="CIP priorities">${r.order.map(a => `<li>${esc(groupName(a))}</li>`).join('')}</ol>`
-    + '<div class="row"><button id="btn-back">Turn so 4 points away</button></div>';
+  const prio = `<ol class="prio" aria-label="CIP priorities">${r.order.map(a => `<li>${esc(groupName(a))}</li>`).join('')}</ol>`;
+  if (!revealed(i)) {
+    box.innerHTML = (t.hint ? prio + '<p class="small">Group 4 now points away from you. Follow 1 → 2 → 3.</p>' : '')
+      + '<div class="row"><button data-pick="R">R</button><button data-pick="S">S</button><button id="btn-hint">Hint</button></div>';
+    box.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('click', () => {
+      state.tries[i] = { ...t, pick: b.dataset.pick };
+      buildStereo(); draw();
+    }));
+    $('btn-hint').addEventListener('click', () => { state.tries[i] = { ...t, hint: true }; draw(); lowestToBack(r); });
+    return;
+  }
+  box.innerHTML = (state.guess ? `<p class="facts">${t.pick === r.rs ? 'Right' : 'Not quite'}: it is <b>${r.rs}</b>.</p>` : '')
+    + prio + '<div class="row"><button id="btn-back">Turn so 4 points away</button></div>';
   $('btn-back').addEventListener('click', () => lowestToBack(r));
 }
 
@@ -227,7 +244,7 @@ async function run(name) {
 
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })) };
-    state.hl = state.atom = state.st = -1;
+    state.hl = state.atom = state.st = -1; state.tries = {};
     viewer.removeAllModels();
     viewer.addModel(res.molfile, 'sdf', { keepH: true });
     viewer.setClickable({}, true, atom => { // tapping an atom only means something on the Structure tab
@@ -286,6 +303,11 @@ $('btn-h').addEventListener('click', e => {
   if (!state.h && cur?.atoms[state.atom]?.el === 'H') state.atom = -1;
   e.currentTarget.setAttribute('aria-pressed', String(state.h));
   draw();
+});
+$('btn-guess').addEventListener('click', e => {
+  state.guess = !state.guess; state.tries = {};
+  e.currentTarget.setAttribute('aria-pressed', String(state.guess));
+  buildStereo(); draw();
 });
 $('btn-reset').addEventListener('click', () => { if (home) { anim++; viewer.setView(home); viewer.render(); } });
 const retheme = () => { viewer.setBackgroundColor(tok('--stage')); draw(); };

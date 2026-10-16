@@ -5,7 +5,7 @@ Work happens on branch `1b`. main stays untouched until 1b is done.
 ## Steps
 1. [x] R/S labels (Stereo tab rows, highlight center + neighbors, "not set" note)
 2. [x] CIP priorities 1–4 (chem.js) + labels on the model + "put #4 in back" rotation
-3. [ ] Guess-first toggle (off by default): R / S / Hint
+3. [x] Guess-first toggle (off by default): R / S / Hint
 4. [ ] Mirror image beside the model
 5. [ ] README, delete this file, merge into main, check the live site
 
@@ -35,8 +35,15 @@ Work happens on branch `1b`. main stays untouched until 1b is done.
   and "Turn so 4 points away" animates the view (quaternion math in app.js; camera is on +z, so away = −z).
   Checked in the local browser: after the turn, group 4 has the same screen x,y as the center and lies behind it.
 
+- Step 3: "Guess first" toggle above the center rows (state.guess, state.tries[i] = {pick, hint}). Open center:
+  row shows "?", detail shows only R / S / Hint. Hint = priorities on the model + list, then the turn. A pick opens
+  the answer ("Right/Not quite: it is S"). Toggling or a new molecule resets the tries. Checked in the local browser.
+
 ## Next
-Step 3: guess-first toggle (off by default). On: hide R/S and priorities; selected center shows R / S / Hint.
+Step 4: mirror image. Plan: second 3Dmol model, reflected through a plane perpendicular to the screen's x axis
+(built from the current view, so it looks like a mirror on screen), shifted to the right; translucent plane between.
+Verdict from chemistry, not a rigid overlay (flexible achiral molecules would not overlay rigidly): compare OCL
+idcodes of the molecule and its mirror image. Mirror is a Stereo-tab view: leaving the tab turns it off.
 
 ## Local browser check
 The sandbox cannot reach the CDNs, but Playwright + Chromium work: a harness routes jsDelivr to node_modules /
