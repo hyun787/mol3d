@@ -6,7 +6,7 @@ Work happens on branch `1b`. main stays untouched until 1b is done.
 1. [x] R/S labels (Stereo tab rows, highlight center + neighbors, "not set" note)
 2. [x] CIP priorities 1–4 (chem.js) + labels on the model + "put #4 in back" rotation
 3. [x] Guess-first toggle (off by default): R / S / Hint
-4. [ ] Mirror image beside the model
+4. [x] Mirror image beside the model
 5. [ ] README, delete this file, merge into main, check the live site
 
 ## Library behavior checked
@@ -39,11 +39,16 @@ Work happens on branch `1b`. main stays untouched until 1b is done.
   row shows "?", detail shows only R / S / Hint. Hint = priorities on the model + list, then the turn. A pick opens
   the answer ("Right/Not quite: it is S"). Toggling or a new molecule resets the tries. Checked in the local browser.
 
+- Step 4: "Mirror image" button (only with stereocenters). Model 1 = reflected molfile, built from the current view
+  (plane perpendicular to the screen x axis, 1.5 Å past the model), translucent plane box between, zoom to both.
+  Labels on both (mirror: R/S swapped). "Turn so 4 points away" removes the mirror, turns, then rebuilds it, so both
+  group 4s point away. Leaving the Stereo tab or loading a molecule turns it off. Verdict = chem.js superimposable()
+  (OCL idcode of model vs reflected copy), checked against RDKit (invert @/@@, compare canonical SMILES).
+- Pitfall: 3Dmol `getModel(id)` returns the LAST model when the id is missing, so `getModel(1)` without a mirror is
+  model 0. Always check `getID() === 1`.
+
 ## Next
-Step 4: mirror image. Plan: second 3Dmol model, reflected through a plane perpendicular to the screen's x axis
-(built from the current view, so it looks like a mirror on screen), shifted to the right; translucent plane between.
-Verdict from chemistry, not a rigid overlay (flexible achiral molecules would not overlay rigidly): compare OCL
-idcodes of the molecule and its mirror image. Mirror is a Stereo-tab view: leaving the tab turns it off.
+Step 5: README, delete this file, merge into main, push, check the live site.
 
 ## Local browser check
 The sandbox cannot reach the CDNs, but Playwright + Chromium work: a harness routes jsDelivr to node_modules /

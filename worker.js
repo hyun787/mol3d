@@ -1,6 +1,6 @@
 // Runs the slow chemistry (3D build, group search) off the main thread so the page stays responsive.
 import OCL from 'https://cdn.jsdelivr.net/npm/openchemlib@9.25.1/dist/openchemlib.js';
-import { build3D, findGroups, atomInfo, kitParts, stereo } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, superimposable } from './chem.js';
 
 const ready = OCL.Resources.registerFromUrl('https://cdn.jsdelivr.net/npm/openchemlib@9.25.1/dist/resources.json');
 
@@ -18,6 +18,7 @@ onmessage = async ({ data: { id, smiles } }) => {
       atoms: atomInfo(mol),
       kit: kitParts(mol),
       stereo: stereo(OCL, mol, given),
+      superimposable: superimposable(mol),
     });
   } catch (e) {
     postMessage({ id, error: e?.message || String(e) });

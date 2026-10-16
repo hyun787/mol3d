@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable } from './chem.js';
 import { resolveName } from './lookup.js';
 
 OCL.Resources.registerFromNodejs();
@@ -272,6 +272,22 @@ for (const [smi, c, want, what] of PRIO) {
   const ok = got.join() === want.join();
   if (!ok) fail++;
   console.log(ok ? 'ok  ' : 'FAIL', 'priority', what, ok ? '' : `(got ${got.join(' ')}, want ${want.join(' ')})`);
+}
+
+// Mirror image: superimposable or not. RDKit check: invert every @/@@ and compare canonical SMILES.
+const MIRROR = [
+  ['L-alanine', 'C[C@@H](C(=O)O)N'], ['(2R,3R)-tartaric acid', '[C@@H]([C@H](C(=O)O)O)(C(=O)O)O'],
+  ['meso-tartaric acid', 'O[C@H](C(=O)O)[C@@H](O)C(=O)O'], ['meso-2,3-dibromobutane', 'C[C@@H](Br)[C@H](C)Br'],
+  ['cis-1,2-dimethylcyclohexane', 'C[C@H]1CCCC[C@H]1C'], ['trans-1,2-dimethylcyclohexane', 'C[C@H]1CCCC[C@@H]1C'],
+  ['ribaric acid', 'O[C@H](C(=O)O)[C@H](O)[C@@H](O)C(=O)O'], ['cholesterol', CASES.find(c => c[0] === 'cholesterol')[1]],
+  ['(1R,2S)-ephedrine', 'C[C@@H]([C@@H](C1=CC=CC=C1)O)NC'], ['ethanol', 'CCO'], ['cis-2-butene', 'C/C=C\\C'],
+];
+for (const [name, smi] of MIRROR) {
+  const can = s => { const m = RDKit.get_mol(s), c = m.get_smiles(); m.delete(); return c; };
+  const want = can(smi) === can(smi.replace(/@@?/g, x => (x === '@' ? '@@' : '@')));
+  const got = superimposable(build3D(OCL, smi).mol);
+  if (got !== want) fail++;
+  console.log(got === want ? 'ok  ' : 'FAIL', 'mirror', name.padEnd(30), got ? 'superimposable' : 'not superimposable', got === want ? '' : '(RDKit disagrees)');
 }
 
 // Name lookup: OPSIN rejects, PubChem is busy (503), then unreachable, then answers.

@@ -4,7 +4,7 @@ import { resolveName } from './lookup.js';
 const $ = id => document.getElementById(id);
 const empty = $('empty'), q = $('q');
 // guess: the guess-first mode; tries[i] = { pick: 'R' | 'S', hint: true } for stereo row i in that mode
-const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {} };
+const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false };
 let cur = null, home = null, token = 0, seq = 0;
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -130,7 +130,7 @@ function buildStereo() {
 
 const selCenter = () => { const r = state.tab === 'stereo' && cur.stereo[state.st]; return r?.kind === 'center' ? r : null; };
 const revealed = i => !state.guess || !!state.tries[i]?.pick;
-const atomAt = i => viewer.getModel(0).selectedAtoms({ index: i })[0];
+const atomAt = (i, m = 0) => viewer.getModel(m).selectedAtoms({ index: i })[0];
 
 // On the model: R/S beside the selected stereocenter, and 1–4 on its groups.
 function addLabels() {
@@ -139,11 +139,13 @@ function addLabels() {
   if (!r) return;
   const show = revealed(state.st);
   if (!show && !state.tries[state.st]?.hint) return;
-  // R/S sits up and to the right of the center, so it stays readable when group 4 is right behind the center
-  if (show) viewer.addLabel(r.rs, { position: atomAt(r.atom), alignment: 'bottomLeft', screenOffset: { x: 10, y: 10 }, fontSize: 18,
-    bold: true, fontColor: tok('--bg'), backgroundColor: tok('--accent'), backgroundOpacity: 1, inFront: true });
-  r.order.forEach((a, k) => viewer.addLabel(String(k + 1), { position: atomAt(a), alignment: 'center', fontSize: 15,
-    bold: true, fontColor: tok('--bg'), backgroundColor: tok('--fg'), backgroundOpacity: 1, inFront: true }));
+  for (const m of state.mirror ? [0, 1] : [0]) { // model 1 = the mirror image: same priorities, R and S swapped
+    // R/S sits up and to the right of the center, so it stays readable when group 4 is right behind the center
+    if (show) viewer.addLabel(m ? { R: 'S', S: 'R' }[r.rs] : r.rs, { position: atomAt(r.atom, m), alignment: 'bottomLeft',
+      screenOffset: { x: 10, y: 10 }, fontSize: 18, bold: true, fontColor: tok('--bg'), backgroundColor: tok('--accent'), backgroundOpacity: 1, inFront: true });
+    r.order.forEach((a, k) => viewer.addLabel(String(k + 1), { position: atomAt(a, m), alignment: 'center', fontSize: 15,
+      bold: true, fontColor: tok('--bg'), backgroundColor: tok('--fg'), backgroundOpacity: 1, inFront: true }));
+  }
 }
 
 // Below the stereocenter rows: the priorities of the selected one and the turn button.
@@ -179,7 +181,7 @@ function qArc(u, t) {
   return w < 1e-6 ? [0, 1, 0, 0] : unit([u[1] * t[2] - u[2] * t[1], u[2] * t[0] - u[0] * t[2], u[0] * t[1] - u[1] * t[0], w]);
 }
 let anim = 0;
-function animateView(to, ms = 600) {
+function animateView(to, ms = 600, done = null) {
   const from = viewer.getView(), my = ++anim, t0 = performance.now();
   if (from[4] * to[4] + from[5] * to[5] + from[6] * to[6] + from[7] * to[7] < 0) for (let k = 4; k < 8; k++) to[k] = -to[k]; // same turn, shorter way
   const step = now => {
@@ -187,15 +189,51 @@ function animateView(to, ms = 600) {
     const f = Math.min(1, (now - t0) / ms), e = f * f * (3 - 2 * f);
     const v = from.map((x, k) => x + (to[k] - x) * e), q = unit(v.slice(4, 8));
     viewer.setView([...v.slice(0, 4), ...q]);
-    if (f < 1) requestAnimationFrame(step);
+    if (f < 1) requestAnimationFrame(step); else done?.();
   };
   requestAnimationFrame(step);
 }
 // Center the view on the stereocenter and turn it so group 4 points straight away from the viewer.
+// With the mirror image on, the mirror is rebuilt for the new view afterwards, so both group 4s point away.
 function lowestToBack(r) {
+  const mirror = state.mirror;
+  if (mirror) setMirror(false, false);
   const c = atomAt(r.atom), l = atomAt(r.order[3]), v = viewer.getView(), q0 = v.slice(4, 8);
   const d = qRot(q0, unit([l.x - c.x, l.y - c.y, l.z - c.z])); // where group 4 points on screen now
-  animateView([-c.x, -c.y, -c.z, v[3], ...qMul(qArc(d, [0, 0, -1]), q0)]);
+  animateView([-c.x, -c.y, -c.z, v[3], ...qMul(qArc(d, [0, 0, -1]), q0)], 600, mirror ? () => setMirror(true) : null);
+}
+
+// ---- Mirror image (Stereo tab): a reflected copy (model 1) to the right of the model. It is built from the current
+// view, so the mirror plane stands upright on screen between the two; both then turn together.
+function setMirror(on, zoom = true) {
+  state.mirror = on;
+  $('btn-mirror').setAttribute('aria-pressed', String(on));
+  $('mirror-note').hidden = !on;
+  const old = viewer.getModel(1); // 3Dmol returns the last model for a missing id, so check it is really model 1
+  if (old?.getID() === 1) viewer.removeModel(old);
+  viewer.removeAllShapes();
+  if (on) {
+    const q = viewer.getView().slice(4, 8), qi = [-q[0], -q[1], -q[2], q[3]];
+    const [n, up, out] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map(v => qRot(qi, v)); // screen axes in model coordinates
+    const pts = viewer.getModel(0).selectedAtoms({}).map(a => [a.x, a.y, a.z]);
+    const c = [0, 1, 2].map(k => pts.reduce((s, p) => s + p[k], 0) / pts.length);
+    const along = (p, u) => (p[0] - c[0]) * u[0] + (p[1] - c[1]) * u[1] + (p[2] - c[2]) * u[2];
+    const size = u => 2 * Math.max(...pts.map(p => Math.abs(along(p, u)))) + 3;
+    const half = size(n) / 2; // the plane sits 1.5 Å past the model's right edge
+    const reflect = p => { const d = 2 * (along(p, n) - half); return p.map((x, k) => x - d * n[k]); };
+    const lines = cur.molfile.split('\n'), count = parseInt(lines[3].slice(0, 3));
+    for (let i = 4; i < 4 + count; i++) // V2000 atom line: x, y, z in the first 30 characters
+      lines[i] = reflect(lines[i].slice(0, 30).trim().split(/\s+/).map(Number)).map(x => x.toFixed(4).padStart(10)).join('') + lines[i].slice(30);
+    viewer.addModel(lines.join('\n'), 'sdf', { keepH: true });
+    viewer.addBox({ center: { x: c[0] + half * n[0], y: c[1] + half * n[1], z: c[2] + half * n[2] }, color: tok('--muted'), opacity: 0.18,
+      dimensions: { w: { x: n[0] * 0.05, y: n[1] * 0.05, z: n[2] * 0.05 }, h: Object.fromEntries('xyz'.split('').map((k, i) => [k, up[i] * size(up)])),
+        d: Object.fromEntries('xyz'.split('').map((k, i) => [k, out[i] * size(out)])) } });
+    $('mirror-note').textContent = cur.superimposable
+      ? 'Superimposable: turn the mirror image and it matches the original, so it is the same compound. A molecule with stereocenters that matches its mirror image is a meso compound. Build both with your kit and check.'
+      : 'Not superimposable: no turn makes the mirror image match the original, so the two are enantiomers, and every R becomes S. Build both with your kit and try to stack them.';
+  }
+  if (zoom) viewer.zoomTo({}, 400);
+  draw();
 }
 
 function showTab() {
@@ -245,6 +283,7 @@ async function run(name) {
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })) };
     state.hl = state.atom = state.st = -1; state.tries = {};
+    if (state.mirror) setMirror(false, false);
     viewer.removeAllModels();
     viewer.addModel(res.molfile, 'sdf', { keepH: true });
     viewer.setClickable({}, true, atom => { // tapping an atom only means something on the Structure tab
@@ -289,7 +328,10 @@ document.querySelectorAll('[data-style]').forEach(b => b.addEventListener('click
 }));
 const tabs = [...document.querySelectorAll('[data-tab]')];
 tabs.forEach((t, i) => {
-  t.addEventListener('click', () => { state.tab = t.dataset.tab; showTab(); draw(); });
+  t.addEventListener('click', () => {
+    state.tab = t.dataset.tab; showTab();
+    if (state.mirror && state.tab !== 'stereo') setMirror(false); else draw(); // the mirror image is a Stereo-tab view
+  });
   t.addEventListener('keydown', e => { // arrow keys move between tabs, as in any tab list
     const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
     if (!d) return;
@@ -309,7 +351,12 @@ $('btn-guess').addEventListener('click', e => {
   e.currentTarget.setAttribute('aria-pressed', String(state.guess));
   buildStereo(); draw();
 });
-$('btn-reset').addEventListener('click', () => { if (home) { anim++; viewer.setView(home); viewer.render(); } });
+$('btn-reset').addEventListener('click', () => {
+  if (!home) return;
+  anim++; viewer.setView(home);
+  if (state.mirror) setMirror(true); else viewer.render();
+});
+$('btn-mirror').addEventListener('click', () => setMirror(!state.mirror));
 const retheme = () => { viewer.setBackgroundColor(tok('--stage')); draw(); };
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', retheme);
 window.addEventListener('resize', () => { viewer.resize(); viewer.render(); });

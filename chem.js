@@ -335,6 +335,15 @@ export function handedness(mol, center, order) {
   return dot(sub(v1, v4), cross(sub(v2, v4), sub(v3, v4))) < 0 ? 'R' : 'S';
 }
 
+// Does the molecule stack on its mirror image? Compares OCL's canonical code (it includes stereo) of the model and of
+// its reflection. That judges the configuration, not this one 3D shape, so a flexible achiral molecule counts as
+// the same even when this conformer alone would not overlay its mirror image.
+export function superimposable(mol) {
+  const m = mol.getCompactCopy();
+  for (let a = 0; a < m.getAllAtoms(); a++) m.setAtomX(a, -m.getAtomX(a));
+  return m.getIDCode() === mol.getIDCode();
+}
+
 function dihedral(mol, a, b, c, d) {
   const [pa, pb, pc, pd] = [a, b, c, d].map(x => pos(mol, x));
   const n1 = cross(sub(pb, pa), sub(pc, pb)), n2 = cross(sub(pc, pb), sub(pd, pc));
