@@ -13,6 +13,10 @@ Type a compound name and see the molecule in 3D, with buttons for the functional
      - Tap a stereocenter to see its CIP priorities (1–4) on the model, and turn the model so group 4 points away. The priorities come from `chem.js` (rules 1 and 2 on the hierarchical digraph, with duplicate atoms); a center is shown only when they give the same R/S as OpenChemLib. Pseudoasymmetric centers (r/s) and the rare centers that need rules 3–5 are left out.
      - **Guess first** (off by default) hides R/S and the priorities: pick R or S to see the answer, or tap Hint to see the priorities and turn group 4 away first.
      - **Mirror image** shows the reflected molecule beside the model, R and S swapped, and says whether the two are superimposable (enantiomers, or one meso compound).
+   - **Shape:** conformations and ring strain.
+     - **Newman:** each C–C single bond outside a ring with two sp³ carbons (one per symmetry class). Tap one to look straight down it, front carbon toward you; a slider turns the back carbon, and the page says staggered or eclipsed, plus anti or gauche when each carbon carries exactly one non-H group.
+     - **Energy curve:** schematic, order only (no numbers). It follows the textbook rule: eclipsed above staggered, and each eclipsed or gauche pair of carbon groups raises the energy. It is drawn only when every group on the two carbons is H or an sp³ carbon, since polar or sp² groups can change the order. OpenChemLib cannot hold a dihedral fixed while it relaxes the rest (a relaxed scan), and a rigid scan overstates butane's barriers by about 2×, so the curve does not use force-field energies. **Guess first** (off by default) hides the curve until the student turns to the form they think is least stable.
+     - **Ring angles:** for each ring, the angles at its atoms measured on the model, compared with the ideal (109.5° sp³, 120° sp²), with a short note by ring size.
 4. **Viewer.** [3Dmol.js](https://3dmol.org).
 
 ## Files
@@ -22,7 +26,7 @@ Type a compound name and see the molecule in 3D, with buttons for the functional
 - `worker.js`: 3D build and group search (OpenChemLib)
 - `chem.js`: functional-group list and the chemistry helpers
 - `lookup.js`: name → structure (OPSIN, then PubChem with retry)
-- `test.mjs`: self-check (`npm install && npm test`): functional groups over ~50 molecules, hybridization, lone pairs, bond angles, kit counts, hand-checked CIP priorities, and E/Z, ring cis/trans, R/S and mirror-image checks against [RDKit](https://www.rdkit.org) (a test-only dependency)
+- `test.mjs`: self-check (`npm install && npm test`): functional groups over ~50 molecules, hybridization, lone pairs, bond angles, kit counts, Newman bond lists and their order (cross-checked against the textbook strain increments), ring angles, hand-checked CIP priorities, and E/Z, ring cis/trans, R/S and mirror-image checks against [RDKit](https://www.rdkit.org) (a test-only dependency)
 
 ## Notes
 
