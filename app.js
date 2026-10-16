@@ -4,7 +4,7 @@ import { resolveName } from './lookup.js';
 const $ = id => document.getElementById(id);
 const empty = $('empty'), q = $('q');
 // guess: the guess-first mode; tries[i] = { pick: 'R' | 'S', hint: true } for stereo row i in that mode
-const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false, bond: -1, phi: 0, sguess: false, stries: {} };
+const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false, bond: -1, phi: 0, sguess: false, stries: {}, ring: -1 };
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -39,7 +39,7 @@ function styleFor(color) {
 function highlight() {
   if (state.tab === 'structure') return state.atom >= 0 ? [state.atom, ...cur.atoms[state.atom].nbrs] : cur.groups[state.hl]?.atoms;
   if (state.tab === 'stereo') return cur.stereo[state.st]?.atoms;
-  if (state.tab === 'shape') { const b = cur.bonds[state.bond]; return b && [...b.atoms, ...b.front, ...b.back]; }
+  if (state.tab === 'shape') { const b = cur.bonds[state.bond]; return b ? [...b.atoms, ...b.front, ...b.back] : cur.rings[state.ring]?.atoms; }
   return null;
 }
 
@@ -59,6 +59,7 @@ function draw() {
   document.querySelectorAll('#chips button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.hl)));
   document.querySelectorAll('#pane-stereo .rows button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.st)));
   document.querySelectorAll('#bonds button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.bond)));
+  document.querySelectorAll('#rings button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.ring)));
   showAtom();
   showCenter();
   showNewman();
@@ -143,6 +144,36 @@ function buildShape() {
     box.appendChild(row);
   });
   if (!cur.bonds.length) box.innerHTML = '<p class="small">No C–C single bond outside a ring with two sp³ carbons in this molecule.</p>';
+  buildRings();
+}
+
+// Ring-size notes, shown only for rings of sp³ atoms (sp² or aromatic rings get their own line).
+const RING_NOTE = {
+  3: 'Three ring atoms must lie flat in a triangle, so the ring angles are 60°, far below 109.5°. The bonds bend, all its C–H bonds are eclipsed, and three-membered rings hold the most strain.',
+  4: 'A four-membered ring puckers a little, but its angles stay near 88°, still far below 109.5°. Angle strain is large.',
+  5: 'A five-membered ring folds into an envelope. Its angles sit near 105°, close to 109.5°, so angle strain is small. Most of its strain comes from eclipsed bonds.',
+  6: 'A six-membered ring folds into a chair. Its angles sit near 111° and every bond is staggered, so a ring of six sp³ atoms has almost no strain.',
+  7: 'A seven-membered ring folds out of plane. Its angles sit a little above 109.5°, and crowding across the ring adds some strain.',
+};
+
+function buildRings() {
+  const box = $('rings'), deg = x => `${x.toFixed(1)}°`;
+  box.textContent = '';
+  cur.rings.forEach((r, i) => {
+    const row = document.createElement('button'), hybs = new Set(r.hyb);
+    const d = r.ideal === null || hybs.size > 1 ? null : r.mean - r.ideal; // a mixed sp²/sp³ ring has no single ideal
+    const note = r.aromatic ? `This ring is aromatic and flat, with sp² atoms (ideal 120°). A flat ring of ${r.size} atoms averages ${deg(180 * (r.size - 2) / r.size)} per angle.`
+      : r.ideal === null ? 'Hybridization is shown for C, N and O only, so this ring has no ideal angle here.'
+      : hybs.size === 1 && hybs.has('sp3') ? RING_NOTE[r.size]
+      : 'This ring has sp² atoms (ideal 120°) as well as sp³ atoms (ideal 109.5°), so compare each angle with its own ideal.';
+    row.innerHTML = `<span>${r.size}-membered ring${r.aromatic ? ' (aromatic)' : ''}: average angle ${deg(r.mean)}`
+      + (d === null ? '' : ` · ideal ${deg(r.ideal)} · ${Math.abs(d) < 0.5 ? 'about the same' : `${deg(Math.abs(d))} ${d < 0 ? 'smaller' : 'larger'}`}`) + '</span>'
+      + `<span class="sub mono">${esc(r.angles.map(deg).join(', '))}</span>` + (note ? `<span class="sub">${esc(note)}</span>` : '');
+    row.dataset.i = String(i);
+    row.addEventListener('click', () => { if (state.bond >= 0) setBond(-1); state.ring = state.ring === i ? -1 : i; draw(); });
+    box.appendChild(row);
+  });
+  if (!cur.rings.length) box.innerHTML = '<p class="small">No ring in this molecule.</p>';
 }
 
 const plain = a => groupName(a).replace(/–$/, '');
@@ -225,6 +256,7 @@ function alignBond(b) {
 
 function setBond(i, zoom = false) {
   state.bond = i;
+  if (i >= 0) state.ring = -1;
   const b = cur.bonds[i];
   if (b) state.phi = Math.round(b.phi0 / 5) * 5 % 360;
   turn(b || null);
@@ -387,7 +419,7 @@ async function run(name) {
 
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })) };
-    state.hl = state.atom = state.st = state.bond = -1; state.tries = {}; state.stries = {};
+    state.hl = state.atom = state.st = state.bond = -1; state.tries = {}; state.stries = {}; state.ring = -1;
     if (state.mirror) setMirror(false, false);
     viewer.removeAllModels();
     viewer.addModel(res.molfile, 'sdf', { keepH: true });
