@@ -1,6 +1,11 @@
 {
   "private": true,
   "type": "module",
-  "scripts": { "test": "node test.mjs" },
-  "devDependencies": { "openchemlib": "9.25.1" }
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "devDependencies": {
+    "@rdkit/rdkit": "2026.9.1",
+    "openchemlib": "9.25.1"
+  }
 }

@@ -68,8 +68,20 @@ h1 { margin: 0; font-size: 1.75rem; font-weight: 600; letter-spacing: -0.01em; t
 button { font: inherit; font-size: 0.88rem; color: var(--fg); background: transparent; border: 0; padding: 9px 10px; cursor: pointer; min-height: 40px; }
 button:disabled { color: var(--muted); cursor: default; }
 .chips button { border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; min-height: 36px; }
-button[aria-pressed="true"] { background: var(--accent-soft); color: var(--fg); font-weight: 600; }
-.chips button[aria-pressed="true"] { border-color: var(--accent); }
+button[aria-pressed="true"], button[aria-selected="true"] { background: var(--accent-soft); color: var(--fg); font-weight: 600; }
+.chips button[aria-pressed="true"], .rows button[aria-pressed="true"] { border-color: var(--accent); }
+.pane { display: grid; gap: 18px; }
+.small { margin: 0; font-size: 0.82rem; color: var(--muted); }
+.small a { color: inherit; }
+.facts { margin: 0; font-size: 0.9rem; }
+.facts b { font-weight: 600; }
+.parts, .angles { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 0.88rem; }
+.parts li, .angles li { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.parts b, .angles b { font-family: var(--mono); font-weight: 500; white-space: nowrap; }
+.check { margin: 0; padding-left: 18px; font-size: 0.85rem; }
+.rows { display: grid; gap: 6px; }
+.rows button { border: 1px solid var(--line); border-radius: 8px; text-align: left; display: grid; gap: 2px; }
+.rows .sub { font-size: 0.8rem; color: var(--muted); font-weight: 400; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row button { border: 1px solid var(--line); border-radius: 8px; flex: 1 1 auto; }
@@ -116,10 +128,39 @@ footer a { color: inherit; }
           <button data-style="fill" aria-pressed="false">Space-filling</button>
         </div>
       </div>
-      <div class="group">
-        <div class="label">Functional groups</div>
-        <div class="chips" role="group" aria-label="Highlight a functional group" id="chips"></div>
-        <p class="note" id="note"></p>
+      <div class="seg" role="tablist" aria-label="Concept">
+        <button role="tab" id="tab-structure" data-tab="structure" aria-controls="pane-structure" aria-selected="true">Structure</button>
+        <button role="tab" id="tab-kit" data-tab="kit" aria-controls="pane-kit" aria-selected="false">Kit</button>
+        <button role="tab" id="tab-stereo" data-tab="stereo" aria-controls="pane-stereo" aria-selected="false">Stereo</button>
+      </div>
+
+      <div class="pane" id="pane-structure" role="tabpanel" aria-labelledby="tab-structure">
+        <div class="group">
+          <div class="label">Functional groups</div>
+          <div class="chips" role="group" aria-label="Highlight a functional group" id="chips"></div>
+          <p class="note" id="note"></p>
+        </div>
+        <div class="group">
+          <div class="label">Atom</div>
+          <div id="atom" aria-live="polite"></div>
+        </div>
+      </div>
+
+      <div class="pane" id="pane-kit" role="tabpanel" aria-labelledby="tab-kit" hidden>
+        <div class="group">
+          <div class="label">Molecular Visions parts</div>
+          <ul class="parts" id="parts"></ul>
+          <div id="kit-check"></div>
+          <p class="small">Counts follow Dr. Dan Berger's <a href="https://homepages.bluffton.edu/~bergerd/Models/visions.html" target="_blank" rel="noopener">Molecular Visions guide</a> (Bluffton University). Your kit may differ, so check its manual. The kit builds one Lewis structure, and aromatic rings count as alternating single and double bonds, so it cannot show resonance.</p>
+        </div>
+      </div>
+
+      <div class="pane" id="pane-stereo" role="tabpanel" aria-labelledby="tab-stereo" hidden>
+        <div class="group">
+          <div class="label">Double bonds and rings</div>
+          <div class="rows" role="group" aria-label="Highlight a stereo unit" id="stereo"></div>
+          <p class="small">E/Z uses the CIP priority rules. cis/trans is shown for a C=C with one H on each carbon, and for ring atoms that carry one H and one other group.</p>
+        </div>
       </div>
       <div class="row">
         <button id="btn-h" aria-pressed="true">Show H</button>

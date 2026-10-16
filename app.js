@@ -1,9 +1,9 @@
-import { GROUPS } from './chem.js';
+import { GROUPS, KIT_PARTS, IDEAL } from './chem.js';
 import { resolveName } from './lookup.js';
 
 const $ = id => document.getElementById(id);
 const empty = $('empty'), q = $('q');
-const state = { style: 'ball', h: true, hl: -1 };
+const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1 };
 let cur = null, home = null, token = 0, seq = 0;
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -34,19 +34,95 @@ function styleFor(color) {
   return { stick: { radius: 0.14, ...c }, sphere: { scale: 0.25, ...c } };
 }
 
+// Atoms to keep in color for the open tab; everything else is dimmed.
+function highlight() {
+  if (state.tab === 'structure') return state.atom >= 0 ? [state.atom, ...cur.atoms[state.atom].nbrs] : cur.groups[state.hl]?.atoms;
+  if (state.tab === 'stereo') return cur.stereo[state.st]?.atoms;
+  return null;
+}
+
 function draw() {
   if (!cur) return;
-  const g = cur.groups[state.hl];
-  const set = g ? new Set(g.atoms) : null;
+  const g = cur.groups[state.hl], hl = highlight();
+  const set = hl ? new Set(hl) : null;
   const shown = a => state.h || a.elem !== 'H';
   viewer.setStyle({}, {});
   viewer.setStyle({ predicate: a => shown(a) && (!set || set.has(a.index)) }, styleFor(null));
   if (set) viewer.setStyle({ predicate: a => shown(a) && !set.has(a.index) }, styleFor(tok('--dim')));
+  if (state.tab === 'structure' && state.atom >= 0) // the tapped atom gets a bigger ball than its neighbors
+    viewer.addStyle({ predicate: a => shown(a) && a.index === state.atom }, { sphere: { scale: state.style === 'fill' ? 1.15 : 0.42, colorscheme: 'Jmol' } });
   $('note').textContent = g ? g.info
     : cur.groups.length ? 'Tap a group to highlight it in the model.'
     : 'None of the 21 functional groups on our list are in this molecule.';
   document.querySelectorAll('#chips button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.hl)));
+  document.querySelectorAll('#stereo button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.st)));
+  showAtom();
   viewer.render();
+}
+
+const HYB = { sp3: 'sp³', sp2: 'sp²', sp: 'sp' };
+const SUB = n => String(n).replace(/\d/g, d => '₀₁₂₃₄₅₆₇₈₉'[d]);
+const chargeSign = q => (q ? (Math.abs(q) > 1 ? Math.abs(q) : '') + (q > 0 ? '⁺' : '⁻') : '');
+
+function showAtom() {
+  const box = $('atom');
+  if (state.atom < 0) { box.innerHTML = '<p class="small">Tap an atom in the model to see its hybridization, lone pairs and bond angles.</p>'; return; }
+  const a = cur.atoms[state.atom], el = i => cur.atoms[i].el;
+  const lp = a.lp === null ? '—' : `${a.lp} lone pair${a.lp === 1 ? '' : 's'}`;
+  let html = `<p class="facts"><b>${esc(a.el + chargeSign(a.charge))}</b> · ${a.hyb ? HYB[a.hyb] : a.el === 'H' ? 'no hybridization' : 'hybridization not shown'} · ${lp}</p>`;
+  if (a.el === 'H') html += '<p class="small">H bonds with its 1s orbital.</p>';
+  else if (!a.hyb) html += '<p class="small">Hybridization is shown for C, N and O only.</p>';
+  if (a.resonance) html += `<p class="small">${a.lp === 1 ? 'Its lone pair' : 'One lone pair'} sits in a p orbital and is shared with the π bond next to it (resonance), so the atom counts as sp².</p>`;
+  if (!a.angles.length) html += `<p class="small">${a.nbrs.length ? 'Only one bond, so' : 'No bonds, so'} there is no bond angle at this atom.</p>`;
+  else {
+    const rows = a.angles.map(([p, q, deg]) => [[el(p), el(q)].sort().join(`–${a.el}–`), deg])
+      .sort((x, y) => x[0].localeCompare(y[0]) || x[1] - y[1]);
+    if (a.hyb) html += `<p class="facts">Ideal angle (${HYB[a.hyb]}): <b>${IDEAL[a.hyb]}°</b></p>`;
+    html += `<ul class="angles" aria-label="Bond angles in this model">${rows.map(([n, d]) => `<li><span>${n}</span><b>${d.toFixed(1)}°</b></li>`).join('')}</ul>`
+      + '<p class="small">Angles measured on this 3D model. Lone pairs, rings and crowding push real angles away from the ideal.</p>';
+  }
+  box.innerHTML = html;
+}
+
+function buildKit() {
+  const { n, check } = cur.kit;
+  $('parts').innerHTML = KIT_PARTS.filter(p => n[p.id]).map(p => `<li><span>${esc(p.label)}`
+    + (p.id === 'red' && n.redOne !== n.red ? ` (or ${n.redOne} with one piece per 2-bond O)` : '') + `</span><b>${n[p.id]}</b></li>`).join('')
+    || '<li><span>No parts from the guide</span></li>';
+  $('kit-check').innerHTML = (check.length ? '<p class="small">Not counted above:</p><ul class="check">'
+    + check.map(c => `<li>${esc(c.what)}${c.count > 1 ? ` (×${c.count})` : ''}</li>`).join('') + '</ul>' : '')
+    + (n.bend ? '<p class="small">The guide does not say how many bendable pieces each ring atom takes.</p>' : '');
+}
+
+// A ring substituent named by its first atom: CH₃, OH, Cl; "–" means the group goes on.
+function groupName(g) {
+  const a = cur.atoms[g], h = a.nbrs.filter(x => cur.atoms[x].el === 'H').length;
+  return a.el + (h ? 'H' + (h > 1 ? SUB(h) : '') : '') + (a.nbrs.length - h > 1 ? '–' : '');
+}
+
+function buildStereo() {
+  const box = $('stereo');
+  box.textContent = '';
+  if (!cur.stereo.length) { box.innerHTML = '<p class="small">No double bond with E/Z isomers and no cis/trans ring pair in this molecule.</p>'; return; }
+  cur.stereo.forEach((r, i) => {
+    const b = document.createElement('button');
+    const title = r.kind === 'bond'
+      ? `${r.label} double bond: ${r.ez || 'E/Z not assigned'}${r.ct ? ` (${r.ct})` : ''}`
+      : `${groupName(r.groups[0])} and ${groupName(r.groups[1])} on a ${r.size}-membered ring: ${r.ct}`;
+    b.innerHTML = `<span>${esc(title)}</span>` + (r.given ? '' : '<span class="sub">Not set in the source structure, so the 3D build picked this one.</span>');
+    b.dataset.i = String(i);
+    b.addEventListener('click', () => { state.st = state.st === i ? -1 : i; draw(); });
+    box.appendChild(b);
+  });
+}
+
+function showTab() {
+  document.querySelectorAll('[data-tab]').forEach(t => {
+    const on = t.dataset.tab === state.tab;
+    t.setAttribute('aria-selected', String(on));
+    t.tabIndex = on ? 0 : -1;
+    $('pane-' + t.dataset.tab).hidden = !on;
+  });
 }
 
 function buildChips() {
@@ -56,7 +132,7 @@ function buildChips() {
     const b = document.createElement('button');
     b.textContent = g.name + (g.count > 1 ? ` ×${g.count}` : '');
     b.dataset.i = String(k - 1);
-    b.addEventListener('click', () => { state.hl = k - 1; draw(); });
+    b.addEventListener('click', () => { state.hl = k - 1; state.atom = -1; draw(); });
     box.appendChild(b);
   });
 }
@@ -86,9 +162,15 @@ async function run(name) {
 
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })) };
-    state.hl = -1;
+    state.hl = state.atom = state.st = -1;
     viewer.removeAllModels();
     viewer.addModel(res.molfile, 'sdf', { keepH: true });
+    viewer.setClickable({}, true, atom => { // tapping an atom only means something on the Structure tab
+      if (state.tab !== 'structure') return;
+      state.atom = state.atom === atom.index ? -1 : atom.index;
+      state.hl = -1;
+      draw();
+    });
     empty.hidden = true; $('panel').hidden = false; $('foot').hidden = false;
     document.title = `${cur.title} · Mol3D`;
     $('name').textContent = cur.title;
@@ -101,7 +183,7 @@ async function run(name) {
     $('f-note').textContent = '3D model built in your browser (OpenChemLib, MMFF94s+). It shows one low-energy shape; real molecules move between many.'
       + (res.stripped ? ' This is a salt or mixture, so only the largest part is shown.' : '')
       + (res.minimized ? '' : ' The force field does not cover every atom here, so bond lengths are approximate.');
-    buildChips();
+    buildChips(); buildKit(); buildStereo();
     viewer.resize(); viewer.zoomTo(); draw(); home = viewer.getView(); // resize: the stage may have changed size since the viewer was made
   } catch (e) {
     showEmpty(`<span class="err">${esc(e.message || 'The lookup failed. Check the connection and try again.')}</span>`);
@@ -123,7 +205,23 @@ document.querySelectorAll('[data-style]').forEach(b => b.addEventListener('click
   document.querySelectorAll('[data-style]').forEach(x => x.setAttribute('aria-pressed', String(x === b)));
   draw();
 }));
-$('btn-h').addEventListener('click', e => { state.h = !state.h; e.currentTarget.setAttribute('aria-pressed', String(state.h)); draw(); });
+const tabs = [...document.querySelectorAll('[data-tab]')];
+tabs.forEach((t, i) => {
+  t.addEventListener('click', () => { state.tab = t.dataset.tab; showTab(); draw(); });
+  t.addEventListener('keydown', e => { // arrow keys move between tabs, as in any tab list
+    const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    if (!d) return;
+    const next = tabs[(i + d + tabs.length) % tabs.length];
+    next.focus(); next.click();
+  });
+});
+showTab();
+$('btn-h').addEventListener('click', e => {
+  state.h = !state.h;
+  if (!state.h && cur?.atoms[state.atom]?.el === 'H') state.atom = -1;
+  e.currentTarget.setAttribute('aria-pressed', String(state.h));
+  draw();
+});
 $('btn-reset').addEventListener('click', () => { if (home) { viewer.setView(home); viewer.render(); } });
 const retheme = () => { viewer.setBackgroundColor(tok('--stage')); draw(); };
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', retheme);

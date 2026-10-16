@@ -6,7 +6,10 @@ Type a compound name and see the molecule in 3D, with buttons for the functional
 
 1. **Name → structure.** The browser asks [OPSIN](https://www.ebi.ac.uk/opsin/) (EMBL-EBI) to parse the name as a systematic (IUPAC) name. If OPSIN cannot parse it, the browser asks [PubChem](https://pubchem.ncbi.nlm.nih.gov/) to look it up as a common or trade name. Both services allow direct calls from the browser (CORS), so there is no server.
 2. **Structure → 3D.** [OpenChemLib](https://github.com/cheminfo/openchemlib-js) builds a conformer and relaxes it with the MMFF94s+ force field, in a web worker so the page stays responsive. For salts and mixtures only the largest part is shown.
-3. **Functional groups.** `chem.js` holds 21 groups (SMARTS + a short explanation). The groups found in the molecule become buttons that highlight their atoms.
+3. **Tabs, one per concept.**
+   - **Structure:** buttons for the 21 functional groups in `chem.js` (SMARTS + a short explanation). Tap an atom to see its element, hybridization (textbook rule: a lone pair next to a π bond counts as sp²), lone pairs, and each bond angle measured on the model next to the ideal 109.5°/120°/180°.
+   - **Kit:** the parts list for the Darling *Molecular Visions* kit, following Dr. Dan Berger's [guide](https://homepages.bluffton.edu/~bergerd/Models/visions.html) (Bluffton University). Aromatic rings count as one Kekulé structure. Parts the guide does not cover (halogens, S, P, C≡N, …) are listed to check against the kit.
+   - **Stereo:** E/Z for each stereo double bond (CIP rules), cis/trans for 1,2-disubstituted C=C, and cis/trans between substituted ring atoms. When the source structure leaves one open, the page says the 3D build picked it.
 4. **Viewer.** [3Dmol.js](https://3dmol.org).
 
 ## Files
@@ -16,7 +19,7 @@ Type a compound name and see the molecule in 3D, with buttons for the functional
 - `worker.js`: 3D build and group search (OpenChemLib)
 - `chem.js`: functional-group list and the chemistry helpers
 - `lookup.js`: name → structure (OPSIN, then PubChem with retry)
-- `test.mjs`: self-check over ~50 molecules (`npm install && npm test`)
+- `test.mjs`: self-check (`npm install && npm test`): functional groups over ~50 molecules, hybridization, lone pairs, bond angles, kit counts, and E/Z and ring cis/trans cross-checked against [RDKit](https://www.rdkit.org) (a test-only dependency)
 
 ## Notes
 
