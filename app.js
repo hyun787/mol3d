@@ -1,11 +1,11 @@
-import { GROUPS, KIT_PARTS, IDEAL } from './chem.js';
+import { GROUPS, KIT_PARTS, IDEAL, conformer } from './chem.js';
 import { resolveName } from './lookup.js';
 
 const $ = id => document.getElementById(id);
 const empty = $('empty'), q = $('q');
 // guess: the guess-first mode; tries[i] = { pick: 'R' | 'S', hint: true } for stereo row i in that mode
-const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false, bond: -1 };
-let cur = null, home = null, token = 0, seq = 0;
+const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false, bond: -1, phi: 0 };
+let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
@@ -61,6 +61,7 @@ function draw() {
   document.querySelectorAll('#bonds button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.bond)));
   showAtom();
   showCenter();
+  showNewman();
   addLabels();
   viewer.render();
 }
@@ -138,10 +139,55 @@ function buildShape() {
     const row = document.createElement('button'), [f, k] = b.atoms;
     row.innerHTML = `<span>${esc(`${carbon(f)}–${carbon(k)} bond`)}</span><span class="sub">${esc(`Front: ${b.front.map(groupName).join(', ')} · Back: ${b.back.map(groupName).join(', ')}`)}</span>`;
     row.dataset.i = String(i);
-    row.addEventListener('click', () => { state.bond = state.bond === i ? -1 : i; draw(); });
+    row.addEventListener('click', () => setBond(state.bond === i ? -1 : i));
     box.appendChild(row);
   });
   if (!cur.bonds.length) box.innerHTML = '<p class="small">No C–C single bond outside a ring with two sp³ carbons in this molecule.</p>';
+}
+
+const plain = a => groupName(a).replace(/–$/, '');
+
+function showNewman() {
+  const b = cur.bonds[state.bond];
+  $('newman').hidden = !b;
+  if (!b) return;
+  const c = conformer(state.phi, b.ref), [p, q] = b.x.map(plain);
+  $('phi-out').textContent = `Turn the back carbon · ${p}–C–C–${q} dihedral: ${state.phi}°`;
+  $('phi').value = String(state.phi);
+  $('conf').innerHTML = !c.kind ? 'In between: neither staggered nor eclipsed.'
+    : `<b>${c.kind === 'staggered' ? 'Staggered' : 'Eclipsed'}</b>` + (c.rel ? ` · ${esc(p)} and ${esc(q)} are <b>${c.rel}</b>` : '');
+}
+
+// Turn the back side of bond b so its x-pair dihedral is state.phi. b = null puts every atom back where the 3D build put it,
+// so the other tabs (and their bond angles) always see the original model.
+function turn(b) {
+  const atoms = viewer.getModel(0).selectedAtoms({});
+  atoms.forEach((a, i) => { [a.x, a.y, a.z] = home3d[i]; });
+  if (!b) return;
+  const [F, B] = b.atoms.map(i => home3d[i]), k = unit(B.map((v, j) => v - F[j])), h = (state.phi - b.phi0) * Math.PI / 360;
+  const q = [...k.map(v => v * Math.sin(h)), Math.cos(h)];
+  for (const i of b.side) {
+    const v = qRot(q, home3d[i].map((x, j) => x - F[j]));
+    [atoms[i].x, atoms[i].y, atoms[i].z] = v.map((x, j) => x + F[j]);
+  }
+}
+
+// Look straight down bond b: front carbon toward the viewer, its x group pointing up, as in a textbook Newman projection.
+function alignBond(b) {
+  const [F, B] = b.atoms.map(i => home3d[i]), x = home3d[b.x[0]], v = viewer.getView(), q0 = v.slice(4, 8);
+  const q1 = qMul(qArc(qRot(q0, unit(B.map((c, j) => c - F[j]))), [0, 0, -1]), q0);
+  const p = qRot(q1, x.map((c, j) => c - F[j])), h = (Math.PI / 2 - Math.atan2(p[1], p[0])) / 2;
+  const c = F.map((s, j) => (s + B[j]) / 2);
+  animateView([-c[0], -c[1], -c[2], v[3], ...qMul([0, 0, Math.sin(h), Math.cos(h)], q1)]);
+}
+
+function setBond(i, zoom = false) {
+  state.bond = i;
+  const b = cur.bonds[i];
+  if (b) state.phi = Math.round(b.phi0 / 5) * 5 % 360;
+  turn(b || null);
+  draw();
+  if (b) alignBond(b); else if (zoom) viewer.zoomTo({}, 400);
 }
 
 const selCenter = () => { const r = state.tab === 'stereo' && cur.stereo[state.st]; return r?.kind === 'center' ? r : null; };
@@ -303,6 +349,7 @@ async function run(name) {
     if (state.mirror) setMirror(false, false);
     viewer.removeAllModels();
     viewer.addModel(res.molfile, 'sdf', { keepH: true });
+    home3d = viewer.getModel(0).selectedAtoms({}).map(a => [a.x, a.y, a.z]);
     viewer.setClickable({}, true, atom => { // tapping an atom only means something on the Structure tab
       if (state.tab !== 'structure') return;
       state.atom = state.atom === atom.index ? -1 : atom.index;
@@ -346,8 +393,9 @@ document.querySelectorAll('[data-style]').forEach(b => b.addEventListener('click
 const tabs = [...document.querySelectorAll('[data-tab]')];
 tabs.forEach((t, i) => {
   t.addEventListener('click', () => {
-    state.tab = t.dataset.tab; showTab();
-    if (state.mirror && state.tab !== 'stereo') setMirror(false); else draw(); // the mirror image is a Stereo-tab view
+    const left = state.tab; state.tab = t.dataset.tab; showTab();
+    if (left === 'shape' && state.tab !== 'shape' && state.bond >= 0) setBond(-1, true); // the turned model is a Shape-tab view
+    else if (state.mirror && state.tab !== 'stereo') setMirror(false); else draw(); // the mirror image is a Stereo-tab view
   });
   t.addEventListener('keydown', e => { // arrow keys move between tabs, as in any tab list
     const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
@@ -374,6 +422,7 @@ $('btn-reset').addEventListener('click', () => {
   if (state.mirror) setMirror(true); else viewer.render();
 });
 $('btn-mirror').addEventListener('click', () => setMirror(!state.mirror));
+$('phi').addEventListener('input', e => { state.phi = +e.target.value; turn(cur.bonds[state.bond]); draw(); });
 const retheme = () => { viewer.setBackgroundColor(tok('--stage')); draw(); };
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', retheme);
 window.addEventListener('resize', () => { viewer.resize(); viewer.render(); });

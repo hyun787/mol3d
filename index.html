@@ -85,6 +85,7 @@ button[aria-pressed="true"], button[aria-selected="true"] { background: var(--ac
 .rows button { border: 1px solid var(--line); border-radius: 8px; text-align: left; display: grid; gap: 2px; }
 .rows .sub { font-size: 0.8rem; color: var(--muted); font-weight: 400; }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+input[type="range"] { width: 100%; accent-color: var(--accent); min-height: 32px; }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row button { border: 1px solid var(--line); border-radius: 8px; flex: 1 1 auto; }
 .note { margin: 0; font-size: 0.9rem; min-height: 3.1em; }
@@ -181,6 +182,12 @@ footer a { color: inherit; }
         <div class="group">
           <div class="label">Bond rotation (Newman)</div>
           <div class="rows" role="group" aria-label="Look down a C–C bond" id="bonds"></div>
+          <div class="group" id="newman" hidden>
+            <label class="facts" for="phi" id="phi-out"></label>
+            <input id="phi" type="range" min="0" max="355" step="5">
+            <p class="facts" id="conf" aria-live="polite"></p>
+            <p class="small">You look straight down the bond, and the front carbon is closest to you. The slider turns the back carbon. Staggered: the back bonds sit between the front bonds. Eclipsed: they line up behind them. Anti: the two groups point opposite ways (180°). Gauche: they sit 60° apart.</p>
+          </div>
           <p class="small">Listed: C–C single bonds outside rings where both carbons are sp³. Bonds that match by symmetry are listed once.</p>
         </div>
       </div>

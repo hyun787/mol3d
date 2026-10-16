@@ -12,9 +12,10 @@
 - 2a 브랜치 생성 (main 6fc0403 기준)
 - relaxed scan 가능 여부 확인 → OCL 9.25.1(최신)로는 불가. 아래 "막힌 점" 참고.
 - 1단계: chem.js newmanBonds / conformer / ringAngles + test.mjs 케이스. Shape 탭 + 결합 목록(하이라이트).
+- 2단계: 결합 선택 → 결합 방향으로 뷰 정렬(앞 탄소가 화면 쪽, 앞 x 치환기가 위), 슬라이더(5° 간격)로 뒤쪽 탄소 회전,
+  staggered/eclipsed(±5°) + anti/gauche 표시. 다른 탭으로 가면 원래 좌표로 복귀(home3d). 브라우저에서 뷰테인 확인함.
 
 ## 다음에 할 것
-  2. Newman 정렬 + 슬라이더 회전, staggered/eclipsed, anti/gauche, Shape 탭 떠나면 원래 좌표로 복귀
   3. 정성 곡선 (SVG)
   4. 먼저 맞혀보기
   5. 각도 strain (ringAngles는 이미 있음, UI만)
