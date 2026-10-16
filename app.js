@@ -156,6 +156,34 @@ function showNewman() {
   $('phi').value = String(state.phi);
   $('conf').innerHTML = !c.kind ? 'In between: neither staggered nor eclipsed.'
     : `<b>${c.kind === 'staggered' ? 'Staggered' : 'Eclipsed'}</b>` + (c.rel ? ` · ${esc(p)} and ${esc(q)} are <b>${c.rel}</b>` : '');
+  $('curve').innerHTML = b.levels ? curveSVG(b, `${p}–C–C–${q}`) : '';
+  $('curve-note').textContent = b.levels
+    ? 'Schematic: the curve shows which forms are higher in energy, not by how much. It follows the textbook rule: eclipsed forms sit above staggered ones, and each pair of carbon groups that is eclipsed or gauche raises the energy. Tap the curve to turn to that angle.'
+    : 'No curve for this bond. Groups other than H and sp³ carbon (Cl, O, N, F, or a C=C or C=O carbon) bring in polarity and other effects that can change which form is lowest: 1,2-difluoroethane, for example, prefers gauche. Staggered forms are still usually lower than eclipsed ones.';
+}
+
+// Schematic energy vs. dihedral (no numbers): the six forms at 0°, 60° … 300° placed by their order, staggered in the low
+// band and eclipsed in the high band, joined by half-cosine curves. The dot is the slider angle.
+const CW = 280, CH = 140, CL = 26, CR = 14, CT = 10, CB = 24;
+function curveSVG(b, name) {
+  const w = CW - CL - CR, h = CH - CT - CB, lv = b.levels;
+  const band = idx => [...new Set(idx.map(i => lv[i]))].sort((x, y) => x - y);
+  const st = band([1, 3, 5]), ec = band([0, 2, 4]);
+  const y6 = lv.map(r => st.includes(r) ? 0.3 * st.indexOf(r) / Math.max(1, st.length - 1)
+    : ec.length === 1 ? 1 : 0.65 + 0.35 * ec.indexOf(r) / (ec.length - 1));
+  const E = phi => { const i = Math.floor(phi / 60) % 6, t = (phi % 60) / 60, a = y6[i], c = y6[(i + 1) % 6]; return a + (c - a) * (1 - Math.cos(Math.PI * t)) / 2; };
+  const X = phi => CL + w * phi / 360, Y = e => CT + h * (1 - e);
+  const line = Array.from({ length: 73 }, (_, k) => `${X(5 * k).toFixed(1)},${Y(E(5 * k)).toFixed(1)}`).join(' ');
+  const at = r => new Intl.ListFormat('en').format([0, 60, 120, 180, 240, 300].filter((_, i) => lv[i] === r).map(d => d + '°'));
+  const ticks = [0, 60, 120, 180, 240, 300, 360].map(d => `<line x1="${X(d)}" x2="${X(d)}" y1="${CT + h}" y2="${CT + h + 4}" stroke="var(--muted)"/>`
+    + `<text x="${X(d)}" y="${CH - 6}" text-anchor="middle">${d}°</text>`).join('');
+  return `<svg viewBox="0 0 ${CW} ${CH}" role="img" aria-label="${esc(`Schematic energy curve for the ${name} dihedral. Least stable at ${at(Math.max(...lv))}; most stable at ${at(0)}.`)}">
+    <g font-family="var(--mono)" font-size="10" fill="var(--muted)">${ticks}
+      <text transform="translate(10 ${CT + h / 2}) rotate(-90)" text-anchor="middle">Energy →</text></g>
+    <line x1="${CL}" x2="${CL + w}" y1="${CT + h}" y2="${CT + h}" stroke="var(--line)"/>
+    <line x1="${CL}" x2="${CL}" y1="${CT}" y2="${CT + h}" stroke="var(--line)"/>
+    <polyline points="${line}" fill="none" stroke="var(--fg)" stroke-width="2" stroke-linejoin="round"/>
+    <circle cx="${X(state.phi)}" cy="${Y(E(state.phi))}" r="5" fill="var(--accent)" stroke="var(--bg)" stroke-width="2"/></svg>`;
 }
 
 // Turn the back side of bond b so its x-pair dihedral is state.phi. b = null puts every atom back where the 3D build put it,
@@ -422,7 +450,12 @@ $('btn-reset').addEventListener('click', () => {
   if (state.mirror) setMirror(true); else viewer.render();
 });
 $('btn-mirror').addEventListener('click', () => setMirror(!state.mirror));
-$('phi').addEventListener('input', e => { state.phi = +e.target.value; turn(cur.bonds[state.bond]); draw(); });
+const setPhi = phi => { state.phi = phi; turn(cur.bonds[state.bond]); draw(); };
+$('phi').addEventListener('input', e => setPhi(+e.target.value));
+$('curve').addEventListener('click', e => { // tap the curve: turn to that angle (5° steps, 360° = 0°)
+  const r = e.currentTarget.getBoundingClientRect(), d = ((e.clientX - r.left) / r.width * CW - CL) / (CW - CL - CR) * 360;
+  setPhi(Math.round(Math.min(360, Math.max(0, d)) / 5) * 5 % 360);
+});
 const retheme = () => { viewer.setBackgroundColor(tok('--stage')); draw(); };
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', retheme);
 window.addEventListener('resize', () => { viewer.resize(); viewer.render(); });
