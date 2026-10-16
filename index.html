@@ -64,6 +64,7 @@ h1 { margin: 0; font-size: 1.75rem; font-weight: 600; letter-spacing: -0.01em; t
 .label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .seg { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .seg button + button { border-left: 1px solid var(--line); }
+.seg.tabs { grid-template-columns: repeat(4, 1fr); }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 button { font: inherit; font-size: 0.88rem; color: var(--fg); background: transparent; border: 0; padding: 9px 10px; cursor: pointer; min-height: 40px; }
 button:disabled { color: var(--muted); cursor: default; }
@@ -129,10 +130,11 @@ footer a { color: inherit; }
           <button data-style="fill" aria-pressed="false">Space-filling</button>
         </div>
       </div>
-      <div class="seg" role="tablist" aria-label="Concept">
+      <div class="seg tabs" role="tablist" aria-label="Concept">
         <button role="tab" id="tab-structure" data-tab="structure" aria-controls="pane-structure" aria-selected="true">Structure</button>
         <button role="tab" id="tab-kit" data-tab="kit" aria-controls="pane-kit" aria-selected="false">Kit</button>
         <button role="tab" id="tab-stereo" data-tab="stereo" aria-controls="pane-stereo" aria-selected="false">Stereo</button>
+        <button role="tab" id="tab-shape" data-tab="shape" aria-controls="pane-shape" aria-selected="false">Shape</button>
       </div>
 
       <div class="pane" id="pane-structure" role="tabpanel" aria-labelledby="tab-structure">
@@ -172,6 +174,14 @@ footer a { color: inherit; }
           <div class="label">Double bonds and rings</div>
           <div class="rows" role="group" aria-label="Highlight a stereo unit" id="stereo"></div>
           <p class="small">E/Z uses the CIP priority rules. cis/trans is shown for a C=C with one H on each carbon, and for ring atoms that carry one H and one other group.</p>
+        </div>
+      </div>
+
+      <div class="pane" id="pane-shape" role="tabpanel" aria-labelledby="tab-shape" hidden>
+        <div class="group">
+          <div class="label">Bond rotation (Newman)</div>
+          <div class="rows" role="group" aria-label="Look down a C–C bond" id="bonds"></div>
+          <p class="small">Listed: C–C single bonds outside rings where both carbons are sp³. Bonds that match by symmetry are listed once.</p>
         </div>
       </div>
       <div class="row">

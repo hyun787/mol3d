@@ -355,6 +355,87 @@ export function superimposable(mol) {
   return m.getIDCode() === mol.getIDCode();
 }
 
+// ---- Shape tab: Newman projections down C–C bonds, and ring angles ----
+const unit = v => { const n = Math.hypot(...v); return v.map(x => x / n); };
+
+// C–C single bonds outside rings with both carbons sp³, one per set of symmetry-equivalent bonds.
+// Newman view down the bond: front carbon F (the lower atom index) toward the viewer, back carbon B behind it.
+// Angles go around the F→B axis (right-handed), 0° = the front `x` group. `x` = the pair whose dihedral the slider sets:
+// the reference groups when each carbon has exactly one non-H group (then 180° is anti), otherwise the first non-H
+// (or first H) group on each carbon. `phi0` = that dihedral in the 3D model; `side` = atoms that turn with B.
+// `levels` order the six forms at 0°, 60° … 300° (0 = most stable) by the textbook rule: eclipsed is above staggered;
+// among eclipsed forms, more non-H/non-H eclipsed pairs is higher; among staggered forms, more non-H/non-H gauche
+// pairs is higher. This is the same order the textbook increments give (H/H 4.0, H/CH3 6.0, CH3/CH3 11 kJ/mol eclipsed,
+// gauche CH3/CH3 3.8), checked in test.mjs.
+// shortcut: ranked only when every group is H or an sp³ carbon, and all alkyls count alike. Polar or sp² groups can
+// change the order (1,2-difluoroethane prefers gauche); add them only with checked data.
+export function newmanBonds(OCL, mol, atoms) {
+  mol.ensureHelperArrays(OCL.Molecule.cHelperSymmetrySimple);
+  const isH = a => mol.getAtomicNo(a) === 1;
+  const sp3C = a => mol.getAtomicNo(a) === 6 && atoms[a].hyb === 'sp3';
+  const seen = new Set(), out = [];
+  for (let b = 0; b < mol.getAllBonds(); b++) {
+    const [F, B] = [mol.getBondAtom(0, b), mol.getBondAtom(1, b)].sort((p, q) => p - q);
+    if (mol.getBondOrder(b) !== 1 || mol.isRingBond(b) || !sp3C(F) || !sp3C(B)) continue;
+    const key = [mol.getSymmetryRank(F), mol.getSymmetryRank(B)].sort((p, q) => p - q).join();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const front = nbrs(mol, F).filter(a => a !== B), back = nbrs(mol, B).filter(a => a !== F);
+    const heavy = s => s.filter(a => !isH(a));
+    const ref = heavy(front).length === 1 && heavy(back).length === 1;
+    const x = [heavy(front)[0] ?? front[0], heavy(back)[0] ?? back[0]];
+    const u = unit(sub(pos(mol, B), pos(mol, F)));
+    const flat = v => sub(v, u.map(k => k * dot(v, u)));
+    const e1 = unit(flat(sub(pos(mol, x[0]), pos(mol, F)))), e2 = cross(u, e1);
+    const ang = (a, c) => { const v = sub(pos(mol, a), pos(mol, c)); return (Math.atan2(dot(v, e2), dot(v, e1)) * 180 / Math.PI + 360) % 360; };
+    const phi0 = ang(x[1], B);
+    const slot = (a, c, zero) => Math.round(((ang(a, c) - zero + 360) % 360) / 120) * 120 % 360; // 0, 120 or 240
+    const side = new Set([B]);
+    for (const a of side) for (const n of nbrs(mol, a)) if (n !== F) side.add(n); // the bond is not in a ring
+    let levels = null;
+    if ([...front, ...back].every(a => isH(a) || sp3C(a))) {
+      const fx = heavy(front).map(a => slot(a, F, 0)), bx = heavy(back).map(a => slot(a, B, phi0));
+      const key = [0, 60, 120, 180, 240, 300].map(phi => {
+        const ecl = phi % 120 === 0;
+        let n = 0;
+        for (const p of fx) for (const q of bx) { const d = (phi + q - p + 720) % 360; if (ecl ? d === 0 : d === 60 || d === 300) n++; }
+        return (ecl ? 100 : 0) + n;
+      });
+      const keys = [...new Set(key)].sort((p, q) => p - q);
+      levels = key.map(k => keys.indexOf(k));
+    }
+    out.push({ atoms: [F, B], front, back, x, ref, phi0, side: [...side], levels });
+  }
+  return out;
+}
+
+// The form at slider angle phi (the x-pair dihedral): staggered or eclipsed within 5°, otherwise in between (kind null).
+// With reference groups, a staggered form is anti (180°) or gauche (60°, 300°).
+export function conformer(phi, ref) {
+  const k = Math.round(phi / 60);
+  if (Math.abs(phi - 60 * k) > 5) return { kind: null, at: null, rel: null };
+  const at = (k * 60) % 360, kind = k % 2 ? 'staggered' : 'eclipsed';
+  return { kind, at, rel: ref && kind === 'staggered' ? (at === 180 ? 'anti' : 'gauche') : null };
+}
+
+// Each ring (OCL's ring set, up to 7 atoms): the angle at every ring atom between its two ring neighbors, taken from
+// atomInfo's measured angles, with their mean and the mean ideal angle for the atoms' hybridization (null if unknown).
+export function ringAngles(mol, atoms) {
+  const rs = mol.getRingSet(), out = [];
+  for (let r = 0; r < rs.getSize(); r++) {
+    const ring = Array.from(rs.getRingAtoms(r)), n = ring.length; // plain array: OCL's cannot cross postMessage
+    const angles = ring.map((a, i) => {
+      const p = ring[(i + n - 1) % n], q = ring[(i + 1) % n];
+      return atoms[a].angles.find(([s, t]) => (s === p && t === q) || (s === q && t === p))[2];
+    });
+    const hyb = ring.map(a => atoms[a].hyb ?? null);
+    const mean = v => v.reduce((s, x) => s + x, 0) / v.length;
+    out.push({ size: n, atoms: ring, aromatic: rs.isAromatic(r), hyb, angles, mean: mean(angles),
+      ideal: hyb.every(Boolean) ? mean(hyb.map(h => IDEAL[h])) : null });
+  }
+  return out;
+}
+
 function dihedral(mol, a, b, c, d) {
   const [pa, pb, pc, pd] = [a, b, c, d].map(x => pos(mol, x));
   const n1 = cross(sub(pb, pa), sub(pc, pb)), n2 = cross(sub(pc, pb), sub(pd, pc));

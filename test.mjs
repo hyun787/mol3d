@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, newmanBonds, conformer, ringAngles } from './chem.js';
 import { resolveName } from './lookup.js';
 
 OCL.Resources.registerFromNodejs();
@@ -302,6 +302,76 @@ for (const [name, smi] of MIRROR) {
   if (got !== want) fail++;
   console.log(got === want ? 'ok  ' : 'FAIL', 'mirror', name.padEnd(30), got ? 'superimposable' : 'not superimposable', got === want ? '' : '(RDKit disagrees)');
 }
+
+// ---- Shape tab: Newman bonds, one per symmetry class: [name, SMILES, 'front-back' bonds (* = anti/gauche references), ranked]
+const NEWMAN = [
+  ['ethane', 'CC', '0-1', true], ['propane', 'CCC', '0-1', true], ['butane', 'CCCC', '0-1 1-2*', true],
+  ['2-methylbutane', 'CC(C)CC', '0-1 1-3 3-4', true], ['2,3-dimethylbutane', 'CC(C)C(C)C', '0-1 1-3', true],
+  ['2,2-dimethylbutane', 'CC(C)(C)CC', '0-1 1-4 4-5', true], ['methylcyclohexane', 'CC1CCCCC1', '0-1', true],
+  ['1,2-dichloroethane', 'ClCCCl', '1-2*', false], ['ethanol', 'CCO', '0-1', false],
+  ['propene', 'CC=C', '', false], ['toluene', 'Cc1ccccc1', '', false], ['cyclohexane', 'C1CCCCC1', '', false],
+];
+// Independent check of the order: Newman angles straight from the 3D model (own projection, no rounding), each form's
+// energy from the textbook increments, ranked the same way. The result must match `levels` exactly.
+const INC = { HH: 4.0, HX: 6.0, XX: 11, gauche: 3.8 }; // kJ/mol: eclipsed pairs, and gauche CH3/CH3
+const vsub = (p, q) => p.map((v, i) => v - q[i]), vdot = (p, q) => p.reduce((s, v, i) => s + v * q[i], 0);
+function textbookLevels(mol, { atoms: [F, B], front, back, x, phi0 }) {
+  const P = a => [mol.getAtomX(a), mol.getAtomY(a), mol.getAtomZ(a)];
+  const ax = vsub(P(B), P(F)), u = ax.map(v => v / Math.hypot(...ax));
+  const flat = a => { const v = vsub(P(a), P(front.includes(a) ? F : B)); return vsub(v, u.map(k => k * vdot(v, u))); };
+  const r = flat(x[0]), s = [u[1] * r[2] - u[2] * r[1], u[2] * r[0] - u[0] * r[2], u[0] * r[1] - u[1] * r[0]];
+  const th = a => { const v = flat(a); return Math.atan2(vdot(v, s), vdot(v, r)) * 180 / Math.PI; };
+  const heavy = a => mol.getAtomicNo(a) !== 1;
+  const E = [0, 60, 120, 180, 240, 300].map(phi => {
+    let e = 0;
+    for (const f of front) for (const b of back) {
+      const d = Math.abs(((th(b) + phi - phi0 - th(f)) % 360 + 540) % 360 - 180); // 0 = eclipsed, 180 = anti
+      if (d < 30) e += heavy(f) && heavy(b) ? INC.XX : heavy(f) || heavy(b) ? INC.HX : INC.HH;
+      else if (d < 90 && heavy(f) && heavy(b)) e += INC.gauche;
+    }
+    return Math.round(e * 10);
+  });
+  const keys = [...new Set(E)].sort((p, q) => p - q);
+  return E.map(k => keys.indexOf(k));
+}
+for (const [name, smi, want, ranked] of NEWMAN) {
+  const { mol } = build3D(OCL, smi), bonds = newmanBonds(OCL, mol, atomInfo(mol));
+  const got = bonds.map(b => b.atoms.join('-') + (b.ref ? '*' : '')).join(' ');
+  const bad = bonds.filter(b => ranked ? b.levels?.join() !== textbookLevels(mol, b).join() : b.levels);
+  const ok = got === want && !bad.length;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'newman', name.padEnd(20), got || '(none)', bonds.map(b => b.levels?.join('') ?? '-').join(' '),
+    ok ? '' : `(want ${want}, ${ranked ? 'textbook ' + bad.map(b => textbookLevels(mol, b).join('')).join(' ') : 'no ranking'})`);
+}
+// Butane C2–C3 by hand: 0° (CH3/CH3 eclipsed) > 120° = 240° (H/CH3 eclipsed) > 60° = 300° (gauche) > 180° (anti)
+const bu = newmanBonds(OCL, build3D(OCL, 'CCCC').mol, atomInfo(build3D(OCL, 'CCCC').mol))[1];
+if (bu.levels.join('') !== '312021' || Math.abs(bu.phi0 - 180) > 2) { fail++; console.log('FAIL butane C2–C3 order', bu.levels, bu.phi0); }
+// What the slider position shows: [phi, references?, expected]
+for (const [phi, ref, want] of [[180, true, 'staggered anti'], [60, true, 'staggered gauche'], [300, true, 'staggered gauche'],
+  [0, true, 'eclipsed'], [355, true, 'eclipsed'], [120, false, 'eclipsed'], [63, true, 'staggered gauche'], [66, true, 'between'],
+  [30, false, 'between'], [180, false, 'staggered']]) {
+  const c = conformer(phi, ref), got = c.kind ? [c.kind, c.rel].filter(Boolean).join(' ') : 'between';
+  if (got !== want) { fail++; console.log('FAIL conformer at', phi, ref, got, `(want ${want})`); }
+}
+
+// Ring angles: [name, SMILES, ring size, lowest and highest allowed mean angle, ideal]
+const RINGS = [
+  ['cyclopropane', 'C1CC1', 3, 59.5, 60.5, 109.5], ['cyclobutane', 'C1CCC1', 4, 86, 90, 109.5],
+  ['cyclopentane', 'C1CCCC1', 5, 103, 106, 109.5], ['cyclohexane', 'C1CCCCC1', 6, 110, 112.5, 109.5],
+  ['benzene', 'c1ccccc1', 6, 119.5, 120.5, 120], ['oxirane', 'C1CO1', 3, 59, 61, 109.5],
+];
+for (const [name, smi, size, lo, hi, ideal] of RINGS) {
+  const { mol } = build3D(OCL, smi), r = ringAngles(mol, atomInfo(mol));
+  const ok = r.length === 1 && r[0].size === size && r[0].mean >= lo && r[0].mean <= hi && Math.abs(r[0].ideal - ideal) < 0.01;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'ring', name.padEnd(14), r.map(x => `${x.size}: mean ${x.mean.toFixed(1)}°, ideal ${x.ideal}`).join(' '), ok ? '' : `(want ${size}: ${lo}–${hi}°, ideal ${ideal})`);
+}
+const decalin = ringAngles(build3D(OCL, 'C1CCC2CCCCC2C1').mol, atomInfo(build3D(OCL, 'C1CCC2CCCCC2C1').mol));
+if (decalin.length !== 2 || decalin.some(r => r.size !== 6)) { fail++; console.log('FAIL decalin rings', decalin.map(r => r.size)); }
+
+// The worker posts these to the page, so they must survive structured cloning (OCL's own arrays do not).
+try { const m = build3D(OCL, 'CC1CCC2CCCCC2C1').mol, at = atomInfo(m); structuredClone({ b: newmanBonds(OCL, m, at), r: ringAngles(m, at) }); }
+catch (e) { fail++; console.log('FAIL Shape data cannot be posted from the worker:', e.message); }
 
 // Name lookup: OPSIN rejects, PubChem is busy (503), then unreachable, then answers.
 const replies = [new Response('{}', { status: 404 }), new Response('', { status: 503 }), 'throw',

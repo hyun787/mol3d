@@ -1,17 +1,23 @@
 # 2a 진행 상황 (끝나면 이 파일을 지우고 main에 합친다)
 
+## 결정
+- 에너지 곡선은 **정성 표시만** (사용자 선택, 선택지 2). 숫자·kJ/mol 없음. 가림형 봉우리, 엇갈림형 골짜기, 높낮이 순서만.
+- 순서 규칙(교과서): 가림형 > 엇갈림형. 가림형끼리는 X/X 가림 쌍이 많을수록, 엇갈림형끼리는 X/X gauche 쌍이 많을수록 높다.
+  H와 sp³ 탄소만 붙은 결합에서만 순서를 매긴다 (Cl, O, F, sp² 등이 있으면 순서 없음: gauche 효과 등으로 뒤집힐 수 있음).
+  이 순서는 교과서 증분값(4.0/6.0/11/3.8)으로 매긴 순서와 항상 같다 (test.mjs에서 3D 좌표로 독립 대조).
+- anti/gauche 표시는 두 탄소에 H가 아닌 치환기가 정확히 하나씩일 때만.
+- 앞 탄소 = 원자 번호가 작은 쪽. 대칭으로 같은 결합은 한 번만 (getSymmetryRank).
+
 ## 끝난 것
 - 2a 브랜치 생성 (main 6fc0403 기준)
 - relaxed scan 가능 여부 확인 → OCL 9.25.1(최신)로는 불가. 아래 "막힌 점" 참고.
+- 1단계: chem.js newmanBonds / conformer / ringAngles + test.mjs 케이스. Shape 탭 + 결합 목록(하이라이트).
 
 ## 다음에 할 것
-- 사용자가 에너지 곡선 방식을 고르면 그에 맞춰 시작:
-  1. Shape 탭 + 회전 가능한 C–C 결합 목록
-  2. Newman 정렬 + 슬라이더 회전, staggered/eclipsed, anti/gauche
-  3. 에너지 곡선 (SVG)
+  2. Newman 정렬 + 슬라이더 회전, staggered/eclipsed, anti/gauche, Shape 탭 떠나면 원래 좌표로 복귀
+  3. 정성 곡선 (SVG)
   4. 먼저 맞혀보기
-  5. 각도 strain
-  6. Shape 탭 떠나면 원래 모델로 복귀
+  5. 각도 strain (ringAngles는 이미 있음, UI만)
 
 ## 막힌 점과 시도한 방법
 - relaxed scan(이면각 고정 + 나머지 최적화)이 안 된다.
@@ -34,3 +40,6 @@
 - OCL MMFF 에너지 단위는 kcal/mol (×4.184 = kJ/mol).
 - getCompactCopy()한 분자는 getAllConnAtoms 전에 ensureHelperArrays(cHelperNeighbours)가 필요하다.
 - ForceFieldMMFF94 생성(타입 지정 포함)은 뷰테인에서 약 2–3 ms.
+- OCL getRingAtoms()는 GWT 배열(함수 속성 포함)이라 postMessage로 못 보낸다 → Array.from. test.mjs에 structuredClone 검사.
+- 3Dmol: 원자 x/y/z를 바꾼 뒤 render()만으로는 안 바뀌고, setStyle을 다시 불러야 새 좌표로 그린다 (draw()가 매번 부름).
+- 브라우저 확인: 스크래치패드에 harness(page.route로 OCL/3Dmol/OPSIN 응답)를 만들어 씀. 스크린샷을 저장소 폴더에 저장하지 않게 주의.

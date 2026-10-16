@@ -4,7 +4,7 @@ import { resolveName } from './lookup.js';
 const $ = id => document.getElementById(id);
 const empty = $('empty'), q = $('q');
 // guess: the guess-first mode; tries[i] = { pick: 'R' | 'S', hint: true } for stereo row i in that mode
-const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false };
+const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false, bond: -1 };
 let cur = null, home = null, token = 0, seq = 0;
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -39,6 +39,7 @@ function styleFor(color) {
 function highlight() {
   if (state.tab === 'structure') return state.atom >= 0 ? [state.atom, ...cur.atoms[state.atom].nbrs] : cur.groups[state.hl]?.atoms;
   if (state.tab === 'stereo') return cur.stereo[state.st]?.atoms;
+  if (state.tab === 'shape') { const b = cur.bonds[state.bond]; return b && [...b.atoms, ...b.front, ...b.back]; }
   return null;
 }
 
@@ -57,6 +58,7 @@ function draw() {
     : 'None of the 21 functional groups on our list are in this molecule.';
   document.querySelectorAll('#chips button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.hl)));
   document.querySelectorAll('#pane-stereo .rows button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.st)));
+  document.querySelectorAll('#bonds button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.bond)));
   showAtom();
   showCenter();
   addLabels();
@@ -126,6 +128,20 @@ function buildStereo() {
   if (!centers.children.length) centers.innerHTML = '<p class="small">No stereocenter (R/S) in this molecule.</p>';
   $('center-tools').hidden = !centers.querySelector('button');
   if (!others.children.length) others.innerHTML = '<p class="small">No double bond with E/Z isomers and no cis/trans ring pair in this molecule.</p>';
+}
+
+// Shape tab: one row per C–C bond, named by its two carbons, with the groups on each.
+function buildShape() {
+  const box = $('bonds'), carbon = a => groupName(a).replace(/–$/, '');
+  box.textContent = '';
+  cur.bonds.forEach((b, i) => {
+    const row = document.createElement('button'), [f, k] = b.atoms;
+    row.innerHTML = `<span>${esc(`${carbon(f)}–${carbon(k)} bond`)}</span><span class="sub">${esc(`Front: ${b.front.map(groupName).join(', ')} · Back: ${b.back.map(groupName).join(', ')}`)}</span>`;
+    row.dataset.i = String(i);
+    row.addEventListener('click', () => { state.bond = state.bond === i ? -1 : i; draw(); });
+    box.appendChild(row);
+  });
+  if (!cur.bonds.length) box.innerHTML = '<p class="small">No C–C single bond outside a ring with two sp³ carbons in this molecule.</p>';
 }
 
 const selCenter = () => { const r = state.tab === 'stereo' && cur.stereo[state.st]; return r?.kind === 'center' ? r : null; };
@@ -283,7 +299,7 @@ async function run(name) {
 
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })) };
-    state.hl = state.atom = state.st = -1; state.tries = {};
+    state.hl = state.atom = state.st = state.bond = -1; state.tries = {};
     if (state.mirror) setMirror(false, false);
     viewer.removeAllModels();
     viewer.addModel(res.molfile, 'sdf', { keepH: true });
@@ -305,7 +321,7 @@ async function run(name) {
     $('f-note').textContent = '3D model built in your browser (OpenChemLib, MMFF94s+). It shows one low-energy shape; real molecules move between many.'
       + (res.stripped ? ' This is a salt or mixture, so only the largest part is shown.' : '')
       + (res.minimized ? '' : ' The force field does not cover every atom here, so bond lengths are approximate.');
-    buildChips(); buildKit(); buildStereo();
+    buildChips(); buildKit(); buildStereo(); buildShape();
     viewer.resize(); viewer.zoomTo(); draw(); home = viewer.getView(); // resize: the stage may have changed size since the viewer was made
   } catch (e) {
     showEmpty(`<span class="err">${esc(e.message || 'The lookup failed. Check the connection and try again.')}</span>`);
