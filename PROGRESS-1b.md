@@ -4,7 +4,7 @@ Work happens on branch `1b`. main stays untouched until 1b is done.
 
 ## Steps
 1. [x] R/S labels (Stereo tab rows, highlight center + neighbors, "not set" note)
-2. [ ] CIP priorities 1–4 (chem.js) + labels on the model + "put #4 in back" rotation
+2. [x] CIP priorities 1–4 (chem.js) + labels on the model + "put #4 in back" rotation
 3. [ ] Guess-first toggle (off by default): R / S / Hint
 4. [ ] Mirror image beside the model
 5. [ ] README, delete this file, merge into main, check the live site
@@ -19,8 +19,8 @@ Work happens on branch `1b`. main stays untouched until 1b is done.
 - OCL labels ribaric acid C3 (true pseudoasymmetric, RDKit "s") as plain S and not pseudo. Our own ranking ties
   there, which is why a center needs a full cipOrder to be shown.
 - OCL marks the penicillin ring N (3 neighbors) as a stereocenter; RDKit does not. Only 4-neighbor centers are shown.
-- OCL puts an atom parity on the central allene carbon (2 neighbors): only 4-neighbor atoms (or 3 + lone pair,
-  e.g. sulfoxide S) count as stereocenters.
+- OCL puts an atom parity on the central allene carbon (2 neighbors): skipped (4-neighbor centers only, so
+  sulfoxide S is skipped too).
 - OCL sulfoxide S and quaternary N R/S match RDKit. `[2H]` stays at its SMILES index in OCL (not moved to the end).
 
 ## Done so far
@@ -31,8 +31,12 @@ Work happens on branch `1b`. main stays untouched until 1b is done.
 - Stereo tab: "Stereocenters (R/S)" rows (name lists groups in atom order, not priority order, so guess mode
   can reuse it), tap = highlight center + neighbors + R/S label on the model.
 
+- Step 2 UI: selecting a center puts 1–4 on its groups and R/S beside it (3Dmol labels), lists the priorities,
+  and "Turn so 4 points away" animates the view (quaternion math in app.js; camera is on +z, so away = −z).
+  Checked in the local browser: after the turn, group 4 has the same screen x,y as the center and lies behind it.
+
 ## Next
-Step 2 UI: priority labels 1–4 on the model when a center is selected, priority list, "turn so 4 points back".
+Step 3: guess-first toggle (off by default). On: hide R/S and priorities; selected center shows R / S / Hint.
 
 ## Local browser check
 The sandbox cannot reach the CDNs, but Playwright + Chromium work: a harness routes jsDelivr to node_modules /

@@ -57,6 +57,7 @@ function draw() {
   document.querySelectorAll('#chips button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.hl)));
   document.querySelectorAll('#pane-stereo .rows button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.st)));
   showAtom();
+  showCenter();
   addLabels();
   viewer.render();
 }
@@ -125,14 +126,59 @@ function buildStereo() {
   if (!others.children.length) others.innerHTML = '<p class="small">No double bond with E/Z isomers and no cis/trans ring pair in this molecule.</p>';
 }
 
-// R/S beside the selected stereocenter on the model.
+const selCenter = () => { const r = state.tab === 'stereo' && cur.stereo[state.st]; return r?.kind === 'center' ? r : null; };
+const atomAt = i => viewer.getModel(0).selectedAtoms({ index: i })[0];
+
+// On the model: R/S beside the selected stereocenter, and 1–4 on its groups.
 function addLabels() {
   viewer.removeAllLabels();
-  const r = state.tab === 'stereo' && cur.stereo[state.st];
-  if (r?.kind !== 'center') return;
-  const [a] = viewer.selectedAtoms({ model: viewer.getModel(0), index: r.atom });
-  viewer.addLabel(r.rs, { position: a, alignment: 'bottomLeft', fontSize: 16, fontColor: tok('--bg'),
-    backgroundColor: tok('--accent'), backgroundOpacity: 0.95, inFront: true });
+  const r = selCenter();
+  if (!r) return;
+  // R/S sits up and to the right of the center, so it stays readable when group 4 is right behind the center
+  viewer.addLabel(r.rs, { position: atomAt(r.atom), alignment: 'bottomLeft', screenOffset: { x: 10, y: 10 }, fontSize: 18,
+    bold: true, fontColor: tok('--bg'), backgroundColor: tok('--accent'), backgroundOpacity: 1, inFront: true });
+  r.order.forEach((a, k) => viewer.addLabel(String(k + 1), { position: atomAt(a), alignment: 'center', fontSize: 15,
+    bold: true, fontColor: tok('--bg'), backgroundColor: tok('--fg'), backgroundOpacity: 1, inFront: true }));
+}
+
+// Below the stereocenter rows: the priorities of the selected one and the turn button.
+function showCenter() {
+  const box = $('center-detail'), r = selCenter();
+  if (!r) { box.textContent = ''; return; }
+  box.innerHTML = `<ol class="prio" aria-label="CIP priorities">${r.order.map(a => `<li>${esc(groupName(a))}</li>`).join('')}</ol>`
+    + '<div class="row"><button id="btn-back">Turn so 4 points away</button></div>';
+  $('btn-back').addEventListener('click', () => lowestToBack(r));
+}
+
+// ---- View rotation. 3Dmol: screen = rotation quaternion q applied to model coordinates; the camera sits on +z,
+// so "away from the viewer" is −z. Quaternions are [x, y, z, w].
+const qMul = ([ax, ay, az, aw], [bx, by, bz, bw]) => [aw * bx + ax * bw + ay * bz - az * by, aw * by - ax * bz + ay * bw + az * bx,
+  aw * bz + ax * by - ay * bx + az * bw, aw * bw - ax * bx - ay * by - az * bz];
+const qRot = (q, v) => qMul(qMul(q, [...v, 0]), [-q[0], -q[1], -q[2], q[3]]).slice(0, 3);
+const unit = v => { const n = Math.hypot(...v); return v.map(x => x / n); };
+// Shortest turn taking unit vector u onto unit vector t (when u is opposite to t, turn 180° about the screen's y axis).
+function qArc(u, t) {
+  const w = 1 + u[0] * t[0] + u[1] * t[1] + u[2] * t[2];
+  return w < 1e-6 ? [0, 1, 0, 0] : unit([u[1] * t[2] - u[2] * t[1], u[2] * t[0] - u[0] * t[2], u[0] * t[1] - u[1] * t[0], w]);
+}
+let anim = 0;
+function animateView(to, ms = 600) {
+  const from = viewer.getView(), my = ++anim, t0 = performance.now();
+  if (from[4] * to[4] + from[5] * to[5] + from[6] * to[6] + from[7] * to[7] < 0) for (let k = 4; k < 8; k++) to[k] = -to[k]; // same turn, shorter way
+  const step = now => {
+    if (my !== anim) return; // a newer turn took over
+    const f = Math.min(1, (now - t0) / ms), e = f * f * (3 - 2 * f);
+    const v = from.map((x, k) => x + (to[k] - x) * e), q = unit(v.slice(4, 8));
+    viewer.setView([...v.slice(0, 4), ...q]);
+    if (f < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+// Center the view on the stereocenter and turn it so group 4 points straight away from the viewer.
+function lowestToBack(r) {
+  const c = atomAt(r.atom), l = atomAt(r.order[3]), v = viewer.getView(), q0 = v.slice(4, 8);
+  const d = qRot(q0, unit([l.x - c.x, l.y - c.y, l.z - c.z])); // where group 4 points on screen now
+  animateView([-c.x, -c.y, -c.z, v[3], ...qMul(qArc(d, [0, 0, -1]), q0)]);
 }
 
 function showTab() {
@@ -241,7 +287,7 @@ $('btn-h').addEventListener('click', e => {
   e.currentTarget.setAttribute('aria-pressed', String(state.h));
   draw();
 });
-$('btn-reset').addEventListener('click', () => { if (home) { viewer.setView(home); viewer.render(); } });
+$('btn-reset').addEventListener('click', () => { if (home) { anim++; viewer.setView(home); viewer.render(); } });
 const retheme = () => { viewer.setBackgroundColor(tok('--stage')); draw(); };
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', retheme);
 window.addEventListener('resize', () => { viewer.resize(); viewer.render(); });
