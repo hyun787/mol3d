@@ -64,7 +64,8 @@ h1 { margin: 0; font-size: 1.75rem; font-weight: 600; letter-spacing: -0.01em; t
 .label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .seg { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .seg button + button { border-left: 1px solid var(--line); }
-.seg.tabs { grid-template-columns: repeat(4, 1fr); }
+.seg.tabs { grid-template-columns: repeat(5, auto); }
+.seg.tabs button { padding-inline: 3px; } /* five tabs on one line in the 280px panel (IBM Plex Sans: 263 of 278px) */
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 button { font: inherit; font-size: 0.88rem; color: var(--fg); background: transparent; border: 0; padding: 9px 10px; cursor: pointer; min-height: 40px; }
 button:disabled { color: var(--muted); cursor: default; }
@@ -147,6 +148,7 @@ footer a { color: inherit; }
         <button role="tab" id="tab-kit" data-tab="kit" aria-controls="pane-kit" aria-selected="false">Kit</button>
         <button role="tab" id="tab-stereo" data-tab="stereo" aria-controls="pane-stereo" aria-selected="false">Stereo</button>
         <button role="tab" id="tab-shape" data-tab="shape" aria-controls="pane-shape" aria-selected="false">Shape</button>
+        <button role="tab" id="tab-reactions" data-tab="reactions" aria-controls="pane-reactions" aria-selected="false">Reactions</button>
       </div>
 
       <div class="pane" id="pane-structure" role="tabpanel" aria-labelledby="tab-structure">
@@ -261,6 +263,26 @@ footer a { color: inherit; }
           <div class="rows" role="group" aria-label="Highlight a ring" id="rings"></div>
           <p class="small">Each ring angle is measured on this 3D model, between the two ring bonds at that atom. The further the angles sit from the ideal (109.5° for sp³, 120° for sp²), the more angle strain the ring holds.</p>
         </div>
+      </div>
+
+      <div class="pane" id="pane-reactions" role="tabpanel" aria-labelledby="tab-reactions" hidden>
+        <div class="group">
+          <div class="label">Principle</div>
+          <div class="rows" role="group" aria-label="Pick a principle" id="rprin">
+            <button data-rp="0"><span>Backside attack</span><span class="sub">S<sub>N</sub>2</span></button>
+            <button data-rp="1"><span>Flat intermediate</span><span class="sub">S<sub>N</sub>1, E1</span></button>
+            <button data-rp="2"><span>Anti-periplanar H and X</span><span class="sub">E2</span></button>
+            <button data-rp="3"><span>Faces of a double bond</span><span class="sub">syn and anti addition</span></button>
+          </div>
+          <div class="row"><button id="btn-xguess" aria-pressed="false">Guess first</button></div>
+          <p class="small">Which mechanism happens depends on the reagent and the solvent. This tab shows only the 3D conditions each one needs.</p>
+        </div>
+        <div class="group" id="rx-pick" hidden>
+          <div class="label" id="rx-pick-label"></div>
+          <div class="rows" role="group" aria-label="Pick a C–X bond" id="rx-rows"></div>
+          <div class="rows" role="group" aria-label="Pick a C=C bond" id="rx-dbl"></div>
+        </div>
+        <div class="group" id="rx-out" aria-live="polite"></div>
       </div>
       <div class="row">
         <button id="btn-h" aria-pressed="true">Show H</button>
