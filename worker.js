@@ -10,7 +10,8 @@ onmessage = async ({ data: { id, smiles, flip } }) => {
     await ready;
     if (flip !== undefined) { // only on request: the conformer search takes a second or more
       const f = flipChair(OCL, last.mol, last.chairs[flip].atoms);
-      postMessage({ id, flip: f && { xyz: f.xyz, subs: f.subs, dE: f.dE } });
+      // toMolfile() writes y and z negated (a 180° turn about x), so turn the flipped chair the same way for the viewer
+      postMessage({ id, flip: f && { xyz: f.xyz.map(([x, y, z]) => [x, -y, -z]), subs: f.subs, dE: f.dE } });
       return;
     }
     const { mol, stripped, minimized, given } = build3D(OCL, smiles);

@@ -474,6 +474,41 @@ for (const [smi, want] of [['CC1CCCCC1', 2], ['OC1CCCCC1', 2], ['C[C@@H]1CCC[C@H
   console.log(ok ? 'ok  ' : 'FAIL', '1,3-diaxial', smi.padEnd(30), axial.length ? `${axial.length} axial group(s), ${pairs.length} pairs` : 'no axial group', ok ? '' : `(want ${n} pairs, nearest-atom check ${near})`);
 }
 
+// ---- Ring flip: the other chair from OCL conformers + MMFF94s+. [name, SMILES, flip expected?]
+// tert-butyl: OCL's generator never builds the axial chair (its ring-fragment step keeps only shapes close in energy),
+// so the page says "flip not available"; this row checks that it stays honest about it.
+const FLIPS = [['methylcyclohexane', 'CC1CCCCC1', true], ['cyclohexanol', 'OC1CCCCC1', true], ['chlorocyclohexane', 'ClC1CCCCC1', true],
+  ['cyclohexylamine', 'NC1CCCCC1', true], ['1,1-dimethylcyclohexane', 'CC1(C)CCCCC1', true], ['N-methylpiperidine', 'CN1CCCCC1', true],
+  ...DIMETHYL.map(([n, s]) => [`${n}-dimethyl`, s, true]), ['tert-butylcyclohexane', 'CC(C)(C)C1CCCCC1', false]];
+const flipped = {}; // name → [flip result, model chair], reused by the stability checks below
+for (const [name, smi, want] of FLIPS) {
+  const { mol } = build3D(OCL, smi), [c] = chairs(mol, atomInfo(mol)), t = performance.now(), f = flipChair(OCL, mol, c.atoms);
+  flipped[name] = [f, c];
+  let why = '';
+  if (!!f !== want) why = want ? 'no flipped chair found' : 'found a flip';
+  else if (f) {
+    // the shown coordinates: an MMFF94s+ minimum (minimise() stays put), moved rigidly onto the model's ring
+    const m = mol.getCompactCopy(); m.ensureHelperArrays(OCL.Molecule.cHelperNeighbours);
+    f.xyz.forEach(([x, y, z], i) => { m.setAtomX(i, x); m.setAtomY(i, y); m.setAtomZ(i, z); });
+    const ff = new OCL.ForceFieldMMFF94(m, 'MMFF94s+'), e0 = ff.getTotalEnergy();
+    const P = (mm, a) => [mm.getAtomX(a), mm.getAtomY(a), mm.getAtomZ(a)], cen = mm => [0, 1, 2].map(k => c.atoms.reduce((s, a) => s + P(mm, a)[k] / 6, 0));
+    const [g0, g1] = [c.subs, chairs(m, atomInfo(m))[0]?.subs ?? []].map(s => s.filter(x => !x.h));
+    if (ff.minimise() !== 0 || Math.abs(ff.getTotalEnergy() - e0) > 0.01) why = 'shown coordinates are not an MMFF minimum';
+    else if (Math.hypot(...vsub(cen(m), cen(mol))) > 0.01) why = 'ring not moved onto the model ring';
+    else if (g1.length !== g0.length || !g1.every((s, i) => s.ax !== g0[i].ax && s.up === g0[i].up)) why = 'groups not swapped axial/equatorial on the same faces';
+    else if (!f.subs.filter(x => !x.h).every((s, i) => s.ax === g1[i].ax)) why = 'returned axial/equatorial does not match the coordinates';
+  }
+  if (why) fail++;
+  console.log(why ? 'FAIL' : 'ok  ', 'flip', name.padEnd(26), f ? f.subs.filter(x => !x.h).map(s => (s.ax ? 'axial' : 'equatorial')).join(', ') : 'not available',
+    `${(performance.now() - t).toFixed(0)}ms`, why ? `(${why})` : '');
+}
+
+// worker.js turns flipped-chair coordinates into the molfile's frame, which writes y and z negated: check that rule.
+{ const { mol } = build3D(OCL, 'CC1CCCCC1'), lines = mol.toMolfile().split('\n');
+  const bad = Array.from({ length: mol.getAllAtoms() }, (_, i) => lines[4 + i].slice(0, 30).trim().split(/\s+/).map(Number))
+    .some(([x, y, z], i) => Math.abs(x - mol.getAtomX(i)) > 1e-3 || Math.abs(y + mol.getAtomY(i)) > 1e-3 || Math.abs(z + mol.getAtomZ(i)) > 1e-3);
+  if (bad) { fail++; console.log('FAIL molfile frame is no longer (x, −y, −z): fix the turn in worker.js'); } }
+
 // The worker posts these to the page, so they must survive structured cloning (OCL's own arrays do not).
 try { const m = build3D(OCL, 'CC1CCC2CCCCC2C1').mol, at = atomInfo(m); structuredClone({ b: newmanBonds(OCL, m, at), r: ringAngles(m, at), c: chairs(m, at) }); }
 catch (e) { fail++; console.log('FAIL Shape data cannot be posted from the worker:', e.message); }

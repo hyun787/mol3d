@@ -197,14 +197,62 @@ function alignChair(c) {
   animateView([-ctr[0], -ctr[1], -ctr[2], v[3], ...qMul(qArc(qRot(q0, unit(n)), [0, Math.cos(t), Math.sin(t)]), q0)]);
 }
 
-// Below the chair rows: each group's axial/equatorial in the chair shown.
+// Why a chair does not flip here (chem.js flipBlock).
+const NO_FLIP = {
+  h: 'Only H atoms sit on this ring, so the two chairs match and a flip changes nothing.',
+  bridged: 'This ring is part of a bridged ring system. The bridge holds it in this shape, so it cannot flip.',
+  trans: 'This ring is trans-fused to another ring, as in trans-decalin. The other ring locks it, so it cannot flip.',
+  cis: 'This ring is cis-fused to another ring, as in cis-decalin. It can flip, but only with the other ring flipping too, and this page does not show that.',
+};
+let flipping = -1; // chair index whose other chair the worker is looking for
+
+// Below the chair rows: each group's axial/equatorial in the chair shown, and the ring flip.
 function showChair() {
   const c = chairNow();
   $('chair').hidden = !c;
   if (!c) return;
-  const g = c.subs.filter(s => !s.h);
+  const g = c.subs.filter(s => !s.h), f = cur.flips[state.chair];
   $('axeq').innerHTML = g.length ? `<ul class="angles" aria-label="Axial and equatorial groups">${g.map(s => `<li><span>${esc(plain(s.sub))}</span><b>${s.ax ? 'axial' : 'equatorial'}</b></li>`).join('')}</ul>`
     : '<p class="small">Only H on this ring: each ring carbon holds one axial and one equatorial H.</p>';
+  const btn = $('btn-flip');
+  btn.hidden = !!c.block || f === null;
+  btn.disabled = flipping === state.chair;
+  btn.setAttribute('aria-pressed', String(state.flipped));
+  $('flip-out').textContent = c.block ? NO_FLIP[c.block]
+    : flipping === state.chair ? 'Looking for the other chair…'
+    : f === null ? 'Flip not available: the conformer search found no other chair. Its 3D builder (OpenChemLib) leaves out ring shapes it rates much higher in energy, which happens when a large group would turn axial.'
+    : f ? (state.flipped ? 'Showing the flipped chair: each axial group is now equatorial, and each equatorial group axial.' : 'Showing the chair as built.') : '';
+  $('flip-note').textContent = f ? 'The animation slides each atom straight to its new place. A real ring flip passes through half-chair and twist-boat forms.' : '';
+}
+
+// Ring flip: the first press asks the worker for the other chair (a conformer search, a second or more), then each press
+// slides between the two.
+$('btn-flip').addEventListener('click', async () => {
+  const i = state.chair, mol = cur;
+  if (!(i in mol.flips)) {
+    flipping = i; draw();
+    const res = await ask({ flip: i });
+    if (res.stale) return; // a new molecule took over
+    flipping = -1;
+    mol.flips[i] = res.flip || null;
+    if (state.chair !== i || state.tab !== 'shape' || !mol.flips[i]) return draw();
+  }
+  const f = cur.flips[i];
+  state.flipped = !state.flipped;
+  morph(state.flipped ? home3d : f.xyz, state.flipped ? f.xyz : home3d);
+});
+
+// Slide every atom in a straight line from one set of positions to another (labels and rods wait for the end).
+let morphing = 0;
+function morph(from, to, ms = 900) {
+  const atoms = viewer.getModel(0).selectedAtoms({}), my = ++morphing, t0 = performance.now();
+  const step = now => {
+    if (my !== morphing) return; // turn() or a newer slide took over
+    const k = Math.min(1, (now - t0) / ms), e = k * k * (3 - 2 * k);
+    atoms.forEach((a, i) => { [a.x, a.y, a.z] = from[i].map((x, j) => x + (to[i][j] - x) * e); });
+    if (k < 1) { state.sliding = true; draw(); requestAnimationFrame(step); } else { state.sliding = false; draw(); }
+  };
+  requestAnimationFrame(step);
 }
 
 // Ring-size notes, shown only for rings of sp³ atoms (sp² or aromatic rings get their own line).
@@ -299,6 +347,7 @@ function curveSVG(b, name) {
 // Turn the back side of bond b so its x-pair dihedral is state.phi. b = null puts every atom back where the 3D build put it,
 // so the other tabs (and their bond angles) always see the original model.
 function turn(b) {
+  morphing++; state.sliding = false; // stop a ring-flip slide
   const atoms = viewer.getModel(0).selectedAtoms({});
   atoms.forEach((a, i) => { [a.x, a.y, a.z] = home3d[i]; });
   if (!b) return;
@@ -337,7 +386,7 @@ const atomAt = (i, m = 0) => viewer.getModel(m).selectedAtoms({ index: i })[0];
 function addLabels() {
   viewer.removeAllLabels();
   drawStrain();
-  const c = chairNow(); // Shape tab: ax/eq beside each group (not H) on the selected chair
+  const c = !state.sliding && chairNow(); // Shape tab: ax/eq beside each group (not H) on the selected chair
   if (c) for (const s of c.subs.filter(x => !x.h)) viewer.addLabel(s.ax ? 'ax' : 'eq', { position: atomAt(s.sub), alignment: 'bottomLeft',
     screenOffset: { x: 6, y: 6 }, fontSize: 12, bold: true, fontColor: tok('--bg'), backgroundColor: tok(s.ax ? '--accent' : '--fg'), backgroundOpacity: 1, inFront: true });
   const r = selCenter();
@@ -505,7 +554,8 @@ async function run(name) {
 
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })), flips: {} }; // flips[i]: the other chair of chair i, null if none
-    state.hl = state.atom = state.st = state.bond = state.ring = state.chair = -1; state.tries = {}; state.stries = {}; state.ctries = {}; state.flipped = false;
+    state.hl = state.atom = state.st = state.bond = state.ring = state.chair = -1; state.tries = {}; state.stries = {}; state.ctries = {}; state.flipped = state.sliding = false;
+    morphing++; flipping = -1; // a ring-flip slide or search for the old molecule is over
     if (state.mirror) setMirror(false, false);
     viewer.removeAllModels();
     viewer.addModel(res.molfile, 'sdf', { keepH: true });

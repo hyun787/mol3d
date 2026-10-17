@@ -4,8 +4,9 @@
 - [x] 1. Chair detection + list (Shape tab group "Chair (axial / equatorial)"). `chem.js`: `isChair` (6 ring torsions alternate in sign, each ≥ 30°), `chairs()` (6-rings of sp³ atoms that are chairs), `flipBlock` reasons. Tests: `chair …` rows.
 - [x] 2. Axial/equatorial: `chairSubs` (angle to ring normal, |cos| > 0.65 = axial). "ax"/"eq" labels on the model, panel list, side-on view (`alignChair`). Newman bond, chair and ring-angle rows deselect each other. Tests: `ax/eq …` (textbook cis/trans ↔ a/e table against stereo()'s RDKit-checked cis/trans), `1,3-diaxial …` (nearest-atom cross-check).
 
+- [x] 3. Ring flip: worker `{flip: i}` → `flipChair` (40 seeds of getOneConformerAsMolecule, each MMFF94s+ minimised, converged only; groups' ax/eq all swapped = flipped; faces kept for the shown one; rigid move onto the model's ring). Slide animation + caveat line; block reasons (only H, bridged, trans-fused, cis-fused shortcut); "Flip not available" text. Leaving the tab or picking another row puts the 3D build back. Tests: `flip …` (shown coords are an MMFF minimum, rigidly aligned, groups swapped on the same faces) + molfile-frame check.
+
 ## Next
-- 3. Ring flip button (worker `{flip: i}` → `flipChair`), animation + caveat line, block reasons in the panel.
 - 4. More stable chair (ΔE, |ΔE| < 1 kJ/mol = same), `judge` (noVerdict) reasons. Tests for the 10 validation cases + A-value table.
 - 5. 1,3-diaxial rods/labels + panel line (`diaxial()` already in chem.js and tested).
 - 6. Guess first for stability.
@@ -17,6 +18,7 @@
 - Decision: verdict only when every non-H group is alkyl, OH or NH₂ (`noVerdict` in chem.js); halogens and C≡N say MMFF disagrees; anything else says not checked.
 
 ## Library behaviour confirmed
+- `toMolfile()` writes (x, −y, −z) of OCL's coordinates (180° turn about x). Coordinates computed in OCL must be turned the same way before going to the viewer (worker.js does this for the flipped chair; test.mjs checks the rule).
 - `getOneConformerAsMolecule` ≈ 30 ms; `initializeConformers` ≈ 600 ms per seed (ring fragment step), 16 ms with `use60degreeSteps` on simple rings. Both keep atom order.
 - `ForceFieldMMFF94` object can be reused: `ff.minimise()` then `ff.getTotalEnergy()` gives the minimised energy.
 - build3D's model for methylcyclohexane and cis-1,3-dimethyl comes out axial (seed 42) — the model is not the lowest chair.
