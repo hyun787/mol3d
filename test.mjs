@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable } from './chem.js';
 import { resolveName } from './lookup.js';
 
 OCL.Resources.registerFromNodejs();
@@ -479,6 +479,7 @@ for (const [smi, want] of [['CC1CCCCC1', 2], ['OC1CCCCC1', 2], ['C[C@@H]1CCC[C@H
 // so the page says "flip not available"; this row checks that it stays honest about it.
 const FLIPS = [['methylcyclohexane', 'CC1CCCCC1', true], ['cyclohexanol', 'OC1CCCCC1', true], ['chlorocyclohexane', 'ClC1CCCCC1', true],
   ['cyclohexylamine', 'NC1CCCCC1', true], ['1,1-dimethylcyclohexane', 'CC1(C)CCCCC1', true], ['N-methylpiperidine', 'CN1CCCCC1', true],
+  ['fluorocyclohexane', 'FC1CCCCC1', true], ['bromocyclohexane', 'BrC1CCCCC1', true], ['iodocyclohexane', 'IC1CCCCC1', true], ['cyclohexanecarbonitrile', 'N#CC1CCCCC1', true],
   ...DIMETHYL.map(([n, s]) => [`${n}-dimethyl`, s, true]), ['tert-butylcyclohexane', 'CC(C)(C)C1CCCCC1', false]];
 const flipped = {}; // name → [flip result, model chair], reused by the stability checks below
 for (const [name, smi, want] of FLIPS) {
@@ -502,6 +503,32 @@ for (const [name, smi, want] of FLIPS) {
   console.log(why ? 'FAIL' : 'ok  ', 'flip', name.padEnd(26), f ? f.subs.filter(x => !x.h).map(s => (s.ax ? 'axial' : 'equatorial')).join(', ') : 'not available',
     `${(performance.now() - t).toFixed(0)}ms`, why ? `(${why})` : '');
 }
+
+// ---- More stable chair. Textbook: a lone group prefers equatorial; cis-1,2, trans-1,3 and cis-1,4 have one axial group
+// in either chair (same energy); trans-1,2, cis-1,3 and trans-1,4 prefer both equatorial.
+const STABLE = [['methylcyclohexane', 'eq'], ['cyclohexanol', 'eq'], ['cyclohexylamine', 'eq'], ['N-methylpiperidine', 'eq'],
+  ['cis-1,2-dimethyl', 'same'], ['trans-1,2-dimethyl', 'eq'], ['cis-1,3-dimethyl', 'eq'], ['trans-1,3-dimethyl', 'same'],
+  ['cis-1,4-dimethyl', 'same'], ['trans-1,4-dimethyl', 'eq'], ['1,1-dimethylcyclohexane', 'same']];
+for (const [name, want] of STABLE) {
+  const [f, c] = flipped[name], v = moreStable(f.dE), win = v === 'built' ? c.subs : f.subs;
+  const got = v === 'same' ? 'same' : win.filter(s => !s.h).every(s => !s.ax) ? 'eq' : 'not all equatorial';
+  const ok = got === want && !c.judge;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'stable', name.padEnd(26), v === 'same' ? 'both chairs about the same' : 'all-equatorial chair lower', `(ΔE ${Math.abs(f.dE).toFixed(2)} kJ/mol)`, ok ? '' : `(want ${want}${c.judge ? ', but judged ' + c.judge.why : ''})`);
+}
+// MMFF94s+ Δ(axial − equatorial) for one group against measured A-values (kJ/mol; Wikipedia's table in kcal/mol × 4.184,
+// with the brief's values for CH₃, OH, Cl). Groups the page judges must come out equatorial-favoured and in the A-value
+// order (CH₃ > NH₂ > OH); groups it leaves out must still disagree, so a fixed force field would show up here.
+// tert-butyl (A ≈ 20) cannot be checked: no axial chair from OCL.
+const A = { methylcyclohexane: 7.3, cyclohexylamine: 6.7, cyclohexanol: 3.6, chlorocyclohexane: 2.2, fluorocyclohexane: 0.63, bromocyclohexane: 1.6, iodocyclohexane: 1.8, cyclohexanecarbonitrile: 0.71 };
+const axMinusEq = name => { const [f, c] = flipped[name]; return c.subs.find(s => !s.h).ax ? -f.dE : f.dE; };
+for (const name of Object.keys(A)) {
+  const d = axMinusEq(name), judged = !flipped[name][1].judge, eqSide = d >= 1;
+  const ok = judged ? eqSide : ['halogen', 'nitrile'].includes(flipped[name][1].judge.why) && (!eqSide || name === 'iodocyclohexane'); // I: right side, left out with the other halogens
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'A-value', name.padEnd(24), `MMFF ${d.toFixed(2)} vs A ${A[name]} kJ/mol`, judged ? 'judged' : 'left out (MMFF disagrees)', ok ? '' : '(recheck noVerdict in chem.js)');
+}
+if (!(axMinusEq('methylcyclohexane') > axMinusEq('cyclohexylamine') && axMinusEq('cyclohexylamine') > axMinusEq('cyclohexanol'))) { fail++; console.log('FAIL MMFF order CH₃ > NH₂ > OH'); }
 
 // worker.js turns flipped-chair coordinates into the molfile's frame, which writes y and z negated: check that rule.
 { const { mol } = build3D(OCL, 'CC1CCCCC1'), lines = mol.toMolfile().split('\n');

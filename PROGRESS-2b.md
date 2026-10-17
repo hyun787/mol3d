@@ -6,8 +6,9 @@
 
 - [x] 3. Ring flip: worker `{flip: i}` → `flipChair` (40 seeds of getOneConformerAsMolecule, each MMFF94s+ minimised, converged only; groups' ax/eq all swapped = flipped; faces kept for the shown one; rigid move onto the model's ring). Slide animation + caveat line; block reasons (only H, bridged, trans-fused, cis-fused shortcut); "Flip not available" text. Leaving the tab or picking another row puts the 3D build back. Tests: `flip …` (shown coords are an MMFF minimum, rigidly aligned, groups swapped on the same faces) + molfile-frame check.
 
+- [x] 4. More stable chair: `moreStable(dE)` (|ΔE| < 1 kJ/mol = same) → "This chair / The other chair is more stable", "Both chairs are about the same". `noVerdict`: halogens, C≡N (MMFF wrong side) and unchecked groups get a reason, no verdict. Tests: `stable …` (10 cases + N-methylpiperidine + 1,1-dimethyl), `A-value …` (judged groups on the equatorial side and in A order CH₃ > NH₂ > OH; left-out groups must still disagree).
+
 ## Next
-- 4. More stable chair (ΔE, |ΔE| < 1 kJ/mol = same), `judge` (noVerdict) reasons. Tests for the 10 validation cases + A-value table.
 - 5. 1,3-diaxial rods/labels + panel line (`diaxial()` already in chem.js and tested).
 - 6. Guess first for stability.
 - Finish: README, delete this file, merge, deploy check, live check.

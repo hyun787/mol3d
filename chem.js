@@ -503,12 +503,12 @@ function flipBlock(mol, ring, subs) {
 // Which chair is more stable comes from MMFF94s+, so it is only told for groups whose axial/equatorial energy was
 // checked against measured A-values in test.mjs. Alkyl (sp³ C with only C and H on it), OH and NH₂ come out on the
 // measured side. F, Cl, Br and C≡N come out on the wrong side (axial lower); I comes out right, but as one family
-// the halogens are left out. Returns null (a verdict can be given), {why: 'wrong', name}, or {why: 'unchecked'}.
+// the halogens are left out. Returns null (a verdict can be given), {why: 'halogen' | 'nitrile' | 'unchecked'}.
 function noVerdict(mol, subs) {
   for (const { atom, sub: s } of subs.filter(x => !x.h)) {
     const z = mol.getAtomicNo(s), nb = nbrs(mol, s), h = nb.filter(x => mol.getAtomicNo(x) === 1).length;
-    if ([9, 17, 35, 53].includes(z)) return { why: 'wrong', name: mol.getAtomLabel(s) };
-    if (z === 6 && nb.length === 2 && piBonds(mol, s) === 2 && nb.some(x => mol.getAtomicNo(x) === 7)) return { why: 'wrong', name: 'C≡N' };
+    if ([9, 17, 35, 53].includes(z)) return { why: 'halogen' };
+    if (z === 6 && nb.length === 2 && piBonds(mol, s) === 2 && nb.some(x => mol.getAtomicNo(x) === 7)) return { why: 'nitrile' };
     const ok = (z === 6 && nb.length === 4 && nb.every(x => x === atom || [1, 6].includes(mol.getAtomicNo(x))))
       || (z === 8 && nb.length === 2 && h === 1) || (z === 7 && nb.length === 3 && h === 2);
     if (!ok) return { why: 'unchecked' };
@@ -581,6 +581,10 @@ export function flipChair(OCL, mol, ring, seeds = 40) {
   if (!best) return null;
   return { E, dE: Number.isFinite(E[0]) ? E[1] - E[0] : null, xyz: alignRing(best.m, mol, ring), subs: chairSubs(best.m, ring) };
 }
+
+// Which chair is more stable from dE = (lowest flipped − lowest as-built) MMFF94s+ energy, kJ/mol: 'built', 'flipped',
+// or 'same' when they differ by less than 1 kJ/mol.
+export const moreStable = dE => (Math.abs(dE) < 1 ? 'same' : dE > 0 ? 'built' : 'flipped');
 
 // Coordinates of every atom of `m`, moved and turned so its ring sits on the ring of `ref`: centers together,
 // normals together, then the turn about the normal that best lines up the ring atoms. Only a rigid move.

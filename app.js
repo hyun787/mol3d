@@ -1,4 +1,4 @@
-import { GROUPS, KIT_PARTS, IDEAL, conformer, stericPairs } from './chem.js';
+import { GROUPS, KIT_PARTS, IDEAL, conformer, stericPairs, diaxial, moreStable } from './chem.js';
 import { resolveName } from './lookup.js';
 
 const $ = id => document.getElementById(id);
@@ -223,6 +223,20 @@ function showChair() {
     : f === null ? 'Flip not available: the conformer search found no other chair. Its 3D builder (OpenChemLib) leaves out ring shapes it rates much higher in energy, which happens when a large group would turn axial.'
     : f ? (state.flipped ? 'Showing the flipped chair: each axial group is now equatorial, and each equatorial group axial.' : 'Showing the chair as built.') : '';
   $('flip-note').textContent = f ? 'The animation slides each atom straight to its new place. A real ring flip passes through half-chair and twist-boat forms.' : '';
+  $('stable').innerHTML = f ? stableHTML(c, f) : '';
+}
+
+// Which chair is more stable, once both are known. MMFF94s+ is trusted only for groups checked against A-values.
+const NO_VERDICT = {
+  halogen: 'No verdict on which chair is more stable. The force field used here (MMFF94s+) does not put F, Cl or Br lower when equatorial, though measured A-values favor equatorial, so the page gives no verdict for halogens.',
+  nitrile: 'No verdict on which chair is more stable. The force field used here (MMFF94s+) puts C≡N lower when axial, though its measured A-value favors equatorial.',
+  unchecked: 'No verdict on which chair is more stable. The force field used here (MMFF94s+) was checked against measured A-values only for alkyl groups, OH and NH₂.',
+};
+function stableHTML(c, f) {
+  if (c.judge || f.dE === null) return `<p class="small">${esc(NO_VERDICT[c.judge?.why] || 'No verdict: the energy of the chair as built is missing.')}</p>`;
+  const v = moreStable(f.dE), shown = state.flipped ? 'flipped' : 'built';
+  return `<p class="facts"><b>${v === 'same' ? 'Both chairs are about the same' : v === shown ? 'This chair is more stable' : 'The other chair is more stable'}</b>.</p>`
+    + '<p class="small">From the MMFF94s+ force field: the lowest energy found for each chair, compared. Less than 1 kJ/mol apart counts as the same. Groups other than H sit better equatorial, where they avoid 1,3-diaxial crowding.</p>';
 }
 
 // Ring flip: the first press asks the worker for the other chair (a conformer search, a second or more), then each press
