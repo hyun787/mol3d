@@ -465,6 +465,15 @@ const LIVE = {
   butane: 'CCCC', isobutane: 'CC(C)C', '1-propanol': 'C(CC)O', '2-propanol': 'CC(C)O', ethanol: 'C(C)O', 'dimethyl ether': 'COC', methanol: 'CO',
   'D-glyceraldehyde': 'O=C[C@H](O)CO', 'L-alanine': 'N[C@@H](C)C(=O)O', 'meso-2,3-dibromobutane': 'C[C@H]([C@H](C)Br)Br',
   'meso-2,4-pentanediol': 'C[C@H](C[C@H](C)O)O', 'cis-1,2-dimethylcyclopropane': 'C[C@H]1[C@H](C1)C', 'cis-1,3-dimethylcyclohexane': 'C[C@@H]1C[C@@H](CCC1)C',
+  // Reactions tab (the systematic names stand in for menthyl and neomenthyl chloride: OPSIN reads "menthyl chloride" without stereo)
+  '(R)-2-bromobutane': 'Br[C@H](C)CC', '(S)-2-bromobutane': 'Br[C@@H](C)CC', '(R)-1-bromo-1-chloroethane': 'Br[C@H](C)Cl', bromomethane: 'BrC', bromoethane: 'BrCC',
+  '2-bromopropane': 'BrC(C)C', '2-bromo-2-methylpropane': 'BrC(C)(C)C', '1-bromo-2,2-dimethylpropane': 'BrCC(C)(C)C', '1-bromopropane': 'BrCCC',
+  '(S)-3-bromo-3-methylhexane': 'Br[C@@](CC)(CCC)C', '2-bromo-3-methylbutane': 'BrC(C)C(C)C', '2-bromobutane': 'BrC(C)CC', 'benzyl bromide': 'C(C1=CC=CC=C1)Br',
+  '3-bromoprop-1-ene': 'BrCC=C', '(3R)-1-bromo-1,3-dimethylcyclohexane': 'BrC1(C[C@@H](CCC1)C)C', '2-bromo-3,3-dimethylbutane': 'BrC(C)C(C)(C)C', bromocyclohexane: 'BrC1CCCCC1',
+  'cis-1-bromo-2-methylcyclohexane': 'Br[C@H]1[C@H](CCCC1)C', 'meso-1,2-dibromo-1,2-diphenylethane': 'C1=CC=C(C=C1)[C@H]([C@H](C2=CC=CC=C2)Br)Br',
+  '(1R,2R)-1,2-dibromo-1,2-diphenylethane': 'Br[C@@H]([C@@H](C1=CC=CC=C1)Br)C1=CC=CC=C1', '2-bromo-2-methylbutane': 'BrC(C)(CC)C',
+  '(1R,2S,5R)-1-chloro-2-isopropyl-5-methylcyclohexane': 'Cl[C@H]1[C@@H](CC[C@H](C1)C)C(C)C', '(1S,2S,5R)-1-chloro-2-isopropyl-5-methylcyclohexane': 'Cl[C@@H]1[C@@H](CC[C@H](C1)C)C(C)C',
+  cyclohexene: 'C1=CCCCC1', '1,2-dimethylcyclohexene': 'CC1=C(CCCC1)C', propene: 'C=CC', '2-methylpropene': 'CC(=C)C',
 };
 for (const [x, y, want] of RELATION.filter(([x, y]) => LIVE[x] && LIVE[y])) {
   const got = relation(OCL, build3D(OCL, LIVE[x]), build3D(OCL, LIVE[y])).kind;
@@ -962,6 +971,26 @@ for (const [name, smi, rg, kind, want] of ADD) {
 for (const [smi, rows, arom] of [['c1ccccc1', 0, true], ['C=Cc1ccccc1', 1, true], ['C=C=C', 0, false], ['C=CC=C', 1, false], ['C=CCC=C', 1, false], ['CC=CCC=C', 2, false]]) {
   const d = doubleBonds(OCL, build3D(OCL, smi).mol);
   if (d.rows.length !== rows || d.aromatic !== arom) { fail++; console.log('FAIL C=C rows', smi, d.rows.length, d.aromatic, `(want ${rows}, ${arom})`); }
+}
+// The same reactions on the SMILES OPSIN or PubChem returned for the names on 17 Oct 2026 (written differently): the
+// results must be the same, compared without atom indexes (products as RDKit SMILES from the molfiles).
+const sigs = {
+  sn2: smi => { const { mol, hal } = rxHal(smi), h = hal.rows.find(x => x.el === 'Br'), r = sn2(OCL, mol, h.c, h.x); return [sn2Rate(h), h.cone.length > 0, rdMol(r.product.molfile), r.product.rs].join(' '); },
+  sn1: smi => { const { mol, hal } = rxHal(smi), h = hal.rows[0], rate = sn1Rate(h), r = rate === 'none' ? null : sn1(OCL, mol, h.c, h.x);
+    return [rate, !!h.shift, r ? `${r.cation.flat} ${r.rel} ${r.products.map(p => rdMol(p.molfile)).sort().join(' ')}` : ''].join(' '); },
+  e2: smi => { const { mol, hal, atoms } = rxHal(smi), h = hal.rows[0], r = e2(OCL, mol, atoms, chairs(mol, atoms), h.c, h.x);
+    return r.alkenes.map((a, i) => `${rdMol(r.hs.find(q => q.alkene === i).molfile)}:${a.ez}:${a.possible}:${a.zaitsev}`).sort().join(' '); },
+  add: (smi, rg) => { const { mol } = build3D(OCL, smi), d = doubleBonds(OCL, mol), r = addition(OCL, mol, ...d.rows[0].atoms, rg); return `${r.kind} ${r.products.map(p => rdMol(p.molfile)).sort().join(' ')}`; },
+};
+for (const [kind, name, smi, rg] of [
+  ...SN2.map(([n, s]) => ['sn2', n.split(' → ')[0], s]), ...SN1.map(([n, s]) => ['sn1', n.replace(/ \(.*\)$/, ''), s]),
+  ...E2.map(([n, s]) => ['e2', { 'menthyl chloride': '(1R,2S,5R)-1-chloro-2-isopropyl-5-methylcyclohexane', 'neomenthyl chloride': '(1S,2S,5R)-1-chloro-2-isopropyl-5-methylcyclohexane' }[n] || n, s]),
+  ...ADD.map(([n, s, rg]) => ['add', n, s, rg])]) {
+  const live = LIVE[name];
+  if (!live) { if (kind !== 'sn2' || !name.startsWith('cis-1-bromo')) console.log('     live', kind, name, '(no live SMILES)'); continue; }
+  const [a, b] = [smi, live].map(x => sigs[kind](x, rg)), ok = a === b;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'live', kind, `${name}${rg ? ` + ${rg}` : ''}`.padEnd(60), ok ? '' : `(${b} vs ${a})`);
 }
 // Equivalent C–X bonds are listed once (meso-2,3-dibromobutane: mirror images; 1,2-dibromoethane), different ones apart
 for (const [smi, want] of [['C[C@@H](Br)[C@H](C)Br', 1], ['BrCCBr', 1], ['BrCCCl', 2], ['C[C@@H](Br)[C@@H](C)Br', 1]]) {

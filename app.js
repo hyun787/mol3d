@@ -1250,6 +1250,8 @@ function showReact() {
   if (state.rp === 1) out.innerHTML = sn1HTML(h, r, busy);
   if (state.rp === 2) out.innerHTML = e2HTML(h, r, busy);
   if (state.rp === 3) out.innerHTML = addHTML(r, busy);
+  if (cur.stereo.some(x => !x.given)) // the results hold for the isomer the build picked
+    out.insertAdjacentHTML('afterbegin', '<p class="small">The name does not set every stereocenter or stereo double bond, so the 3D build picked one (see the Stereo tab); the results here are for that isomer.</p>');
   out.querySelectorAll('[data-rgt]').forEach(b => b.addEventListener('click', () => { state.rgt = b.dataset.rgt; rxView(); }));
   out.querySelectorAll('[data-rh]').forEach(b => b.addEventListener('click', () => { const i = +b.dataset.rh; state.rh = state.rh === i ? -1 : i; applyRx(true); }));
   out.querySelectorAll('[data-sn1v]').forEach(b => b.addEventListener('click', () => { state.sn1v = b.dataset.sn1v; applyRx(false); }));
@@ -1273,8 +1275,7 @@ function sn2HTML(h, r, busy) {
   if (!sn2Open()) return s + '<p class="facts">Is the product R or S at this carbon?</p><div class="row"><button data-xpick="R">R</button><button data-xpick="S">S</button></div>';
   return s + (state.xguess ? verdictLine(state.xpicks[k], rs, `it is <b>${rs}</b>`) : '')
     + `<p class="facts">${was ? `The carbon was <b>${was.rs}</b> and is <b>${rs}</b> in the product.` : `The carbon is <b>${rs}</b> in the product.`}</p>`
-    + (was ? '<p class="small">Inversion turns the arrangement inside out. The R/S letter comes from the priorities, so it can stay the same when OH ranks in a different place than the leaving group did.</p>' : '')
-    + (was && !was.given ? '<p class="small">The name does not set this carbon’s configuration, so the 3D build picked one.</p>' : '');
+    + (was ? '<p class="small">Inversion turns the arrangement inside out. The R/S letter comes from the priorities, so it can stay the same when OH ranks in a different place than the leaving group did.</p>' : '');
 }
 
 const SN1_RATE = {
@@ -1386,6 +1387,7 @@ function e2HTML(h, r, busy) {
     const answer = q.ok && al ? String(q.alkene) : 'none';
     if (state.xguess) s += verdictLine(state.xpicks[k], answer, answer === 'none' ? 'this H cannot be anti, so it gives no alkene' : `it gives the ${esc(alkeneName(al))}`);
     if (q.ok && al) s += `<p class="facts">Alkene, on the right: <b>${esc(alkeneName(al))}</b>, ${SUBST[al.subst]}${al.ez ? '' : ', no E/Z'}.</p>`;
+    if (q.ok && !al) s += '<p class="small">This alkene could not be built in 3D here.</p>';
   }
   const can = r.alkenes.filter(a => a?.possible), z = r.alkenes.filter(a => a?.zaitsev);
   s += '<p class="facts">Alkenes E2 can give here:</p><ul class="angles">' + (can.length ? can.map(a => `<li><span>${esc(alkeneName(a))}, ${SUBST[a.subst]}</span><b>${a.zaitsev ? 'Zaitsev' : ''}</b></li>`).join('') : '<li><span>None: no β H can sit anti</span></li>') + '</ul>';

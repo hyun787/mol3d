@@ -10,8 +10,14 @@ Working notes for the 3c branch. Deleted when 3c is merged.
 
 - Group 4, faces of a double bond: C=C rows (not aromatic, not allene; equivalent ones once), reagent H₂/Pd (syn), Br₂ (anti), OsO₄ (syn), p-orbital lobes on both carbons and reagent arrows from the two faces (Br₂ top, Br⁻ bottom), view with the C=C across and the lobes up (frameTurn), two products from the faces built from the model with the atoms added above/below, shown as formed (open chain: turned about the new C–C bond back to the added dihedral, then fit with the added atoms), kind: one product (no new stereocenter) / one meso compound / enantiomers (racemic) / diastereomers, guess first for the relation, no-C=C and aromatic reasons, Markovnikov note.
 
+- Guess first, all four checked in the browser harness: SN2 R/S, SN1 and addition relation (products hidden until picked), E2 alkene per H (alkene model hidden until picked).
+- A note on the Reactions tab when the name leaves a stereocenter or stereo C=C open (the results are for the isomer the build picked).
+- Live SMILES (OPSIN/PubChem through the live site's lookup.js, 17 Oct 2026) for every reaction test name, in test.mjs's LIVE map; every reaction gives the same results on them. "menthyl chloride" comes back from OPSIN without stereo, PubChem's "neomenthyl chloride" is the mirror image of the one derived from (−)-menthol; the tests use the systematic names.
+- Bug found by the live SMILES and fixed: build3D on an edited molecule. The generator writes coordinates into its input, so a wrong first seed (Z for an E alkene) became the stereo every later seed kept, and (R)-2-bromobutane as OPSIN writes it lost its (E)-2-butene. Each seed now gets a fresh copy of an edited input.
+- README updated.
+
 ## Next
-- Guess-first pass over all four, then README, merge, deploy, live check.
+- Delete this file, merge to main, push, check the deploy and the live site.
 
 ## Decisions taken (defaults, no user input)
 - E2 rows: a ring bond in a ring that is not a chair in the model gets no verdict (the brief's rule is for chairs).

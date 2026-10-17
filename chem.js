@@ -77,8 +77,11 @@ export function build3D(OCL, smiles) {
     return true;
   };
   let m3 = null;
+  // The generator writes its coordinates into the molecule it gets. An edited 3D molecule's stereo is read from its
+  // coordinates, so each seed gets a fresh copy: a wrong first conformer would otherwise become the stereo to keep.
+  const input = typeof smiles === 'string' ? () => mol : () => mol.getCompactCopy();
   for (const seed of [42, ...Array.from({ length: 20 }, (_, i) => i + 1)]) {
-    const m = new OCL.ConformerGenerator(seed).getOneConformerAsMolecule(mol);
+    const m = new OCL.ConformerGenerator(seed).getOneConformerAsMolecule(input());
     if (m && (m3 ??= m) && keeps(m)) { m3 = m; break; }
   }
   if (!m3) throw new Error('Could not build a 3D model for this structure.');
