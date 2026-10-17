@@ -916,7 +916,15 @@ export function flipChair(OCL, mol, ring, seeds = 40) {
     if (m) take(m);
   }
   if (!best) return null;
-  return { E, dE: Number.isFinite(E[0]) ? E[1] - E[0] : null, xyz: alignRing(best.m, mol, ring), subs: chairSubs(best.m, ring) };
+  // The generator does not keep which of a ring CH₂'s two H is which, so put each H back on its own face of the ring
+  // (a flip keeps every group's face): the two positions swap, the shape stays. E2 on the Reactions tab needs the H's identity.
+  const xyz = alignRing(best.m, mol, ring), { n } = ringFrame(mol, ring);
+  for (const a of ring) {
+    const hs = hOn(mol, a), face = (P, h) => dot(sub(P[h], P[a]), n) > 0;
+    if (hs.length === 2 && hs.every(h => face(xyz, h) !== face(Array.from({ length: mol.getAllAtoms() }, (_, i) => pos(mol, i)), h)))
+      [xyz[hs[0]], xyz[hs[1]]] = [xyz[hs[1]], xyz[hs[0]]];
+  }
+  return { E, dE: Number.isFinite(E[0]) ? E[1] - E[0] : null, xyz, subs: chairSubs(best.m, ring) };
 }
 
 // Which chair is more stable from dE = (lowest flipped − lowest as-built) MMFF94s+ energy, kJ/mol: 'built', 'flipped',
@@ -1124,8 +1132,9 @@ function rsAt(OCL, b, want) {
   return out;
 }
 
-// What the page posts for a built product: its molfile (the viewer's frame) and isomeric SMILES.
-const productOut = (b, extra) => ({ molfile: b.mol.toMolfile(), smiles: b.mol.toIsomericSmiles(), ...extra });
+// What the page posts for a built product: its molfile (the viewer's frame). Not OCL's SMILES: for a C=C carbon with a group
+// on each side it can write conflicting / and \ (Br/C(\c1ccccc1)=C/c1ccccc1, which RDKit reads without E/Z).
+const productOut = (b, extra) => ({ molfile: b.mol.toMolfile(), ...extra });
 
 // Each C–Cl, C–Br and C–I on an sp³ carbon, one per set of equivalent ones. deg = carbons on that carbon (0 = methyl);
 // plain = its other groups are all C or H, which is what the textbook rules below cover; neo = 1° next to a quaternary
@@ -1176,7 +1185,7 @@ export const sn2Rate = h => (!h.plain ? null : h.deg === 3 || h.neo ? 'none' : h
 // SN2 with OH⁻: the X becomes an O placed on the back side, 1.43 Å from C along the X → C line. The three other groups
 // stay, so the O sits on their side: inverted. The product is moved onto the inverted reactant (O on the back side, each
 // group's first atom reflected through the plane at C across the C–X line: the umbrella turned inside out).
-// Returns { product: { molfile, smiles, rs } } (rs = R/S at C in the product, or null) or null.
+// Returns { product: { molfile, rs } } (rs = R/S at C in the product, or null) or null.
 export function sn2(OCL, mol, c, x) {
   const C = pos(mol, c), d = unit(sub(C, pos(mol, x))), O = C.map((v, k) => v + 1.43 * d[k]);
   const e = mol.getCompactCopy();
@@ -1238,4 +1247,63 @@ export function sn1(OCL, mol, c, x) {
   });
   if (products.some(b => !b)) return { cation, products: null };
   return { cation, products: products.map(b => productOut(b, { rs: rsAt(OCL, b, [k])[k] ?? null })), rel: relation(OCL, products[0], products[1]).kind };
+}
+
+// E2: each H on a β carbon (an sp³ carbon next to the C–X carbon α). The C–H and C–X bonds must be anti-periplanar
+// (H–Cβ–Cα–X 180°). Outside a ring the Cα–Cβ bond turns: the β side is turned rigidly about it (as on the Shape tab) until
+// the H sits anti. In a ring the bond cannot turn: H and X must both be axial in a chair, and one chair gives that exactly
+// when they sit on opposite faces (trans). This decides by configuration, not by the chair the model happens to be in.
+// Each H's alkene: H and X taken off its anti shape (the model as built, in a ring), Cα=Cβ made double; OCL reads E/Z from
+// the 3D (groups that sat gauche end up cis) and build3D builds it fresh, moved onto that shape.
+// Returns { betas: [β atoms], hs: [{ h, beta (index in betas), ring, ok, now, why, xyz, alkene, molfile }], alkenes:
+// [{ ez, subst, zaitsev, possible, beta }] }: why = null | 'cis' | 'chair' (a ring that is not a chair here);
+// now = anti in the model as built (ring); xyz = the anti shape for the viewer (molfile frame, open chain only).
+export function e2(OCL, mol, atoms, chairList, c, x) {
+  const z = a => mol.getAtomicNo(a), home = Array.from({ length: mol.getAllAtoms() }, (_, a) => pos(mol, a));
+  const betas = heavyNbrs(mol, c).filter(b => b !== x && z(b) === 6 && atoms[b].hyb === 'sp3' && hOn(mol, b).length);
+  const k = i => (i < x ? i : i - 1), byId = new Map(), alkenes = [], hs = [];
+  const tors = (P, a, b, cc, d) => { const b2 = sub(P[cc], P[b]), n1 = cross(sub(P[b], P[a]), b2), n2 = cross(b2, sub(P[d], P[cc]));
+    return Math.atan2(dot(cross(n1, unit(b2)), n2), dot(n1, n2)) * 180 / Math.PI; };
+  for (const [bi, b] of betas.entries()) for (const h of hOn(mol, b)) {
+    const ring = mol.isRingBond(mol.getBond(c, b));
+    let P = home, ok = true, now = null, why = null;
+    if (!ring) {
+      const side = new Set([b]);
+      for (const a of side) for (const n of nbrs(mol, a)) if (n !== c) side.add(n);
+      side.delete(b);
+      const t = tors(home, h, b, c, x);
+      P = [180 - t, t - 180].map(d => turnAbout(home, c, b, [...side], d)).sort((p, q) => Math.abs(tors(q, h, b, c, x)) - Math.abs(tors(p, h, b, c, x)))[0];
+    } else {
+      const ch = chairList.find(r => r.atoms.includes(c) && r.atoms.includes(b)), s = a => ch?.subs.find(q => q.sub === a);
+      if (!ch) { ok = null; why = 'chair'; }
+      else { ok = s(x).up !== s(h).up; now = ok && s(x).ax; why = ok ? null : 'cis'; }
+    }
+    const e = mol.getCompactCopy();
+    P.forEach(([px, py, pz], a) => { e.setAtomX(a, px); e.setAtomY(a, py); e.setAtomZ(a, pz); });
+    e.markAtomForDeletion(h); e.markAtomForDeletion(x);
+    e.deleteMarkedAtomsAndBonds();
+    e.ensureHelperArrays(OCL.Molecule.cHelperNeighbours);
+    e.setBondOrder(e.getBond(k(c), k(b)), 2);
+    e.ensureHelperArrays(OCL.Molecule.cHelperParities);
+    const id = e.getIDCode();
+    if (!byId.has(id)) {
+      const p = rebuild(OCL, e);
+      byId.set(id, alkenes.length);
+      const row = p && stereo(OCL, p.mol, p.given).find(r => r.kind === 'bond' && [r.atoms[0], r.atoms[1]].sort().join() === [k(c), k(b)].sort().join());
+      alkenes.push(p && { b: p, ez: row?.ez ?? null, beta: bi,
+        subst: heavyNbrs(p.mol, k(c)).length - 1 + heavyNbrs(p.mol, k(b)).length - 1, possible: false });
+    }
+    const ai = byId.get(id), al = alkenes[ai];
+    let molfile = null;
+    if (al) {
+      al.possible ||= !!ok;
+      const heavy = Array.from({ length: al.b.mol.getAtoms() }, (_, i) => i);
+      placeOn(al.b.mol, heavy, heavy.map(i => P[i < x ? i : i + 1]));
+      molfile = al.b.mol.toMolfile();
+    }
+    hs.push({ h, beta: bi, ring, ok, now, why, alkene: al ? ai : null, molfile, xyz: ring ? null : P.map(([px, py, pz]) => [px, -py, -pz]) });
+  }
+  // Zaitsev: the more substituted alkene, named only when the alkenes differ in how substituted they are
+  const subs = alkenes.filter(Boolean).map(a => a.subst), top = Math.max(...subs), differ = subs.some(n => n < top);
+  return { betas, hs, alkenes: alkenes.map(a => a && { ez: a.ez, subst: a.subst, possible: a.possible, beta: a.beta, zaitsev: differ && a.subst === top }) };
 }

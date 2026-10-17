@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, isMeso, mirrorPlane, fischer, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH, halides, sn2, sn2Rate, sn1, sn1Rate } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, isMeso, mirrorPlane, fischer, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH, halides, sn2, sn2Rate, sn1, sn1Rate, e2 } from './chem.js';
 const dihedralOf = (m, a, b, c, d) => { const p = i => [m.getAtomX(i), m.getAtomY(i), m.getAtomZ(i)], s = (u, v) => u.map((x, k) => x - v[k]), cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
   const b2 = s(p(c), p(b)), n1 = cr(s(p(b), p(a)), b2), n2 = cr(b2, s(p(d), p(c))), x = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2], y = cr(n1, n2).reduce((t, v, k) => t + v * b2[k], 0) / Math.hypot(...b2);
   return Math.atan2(y, x) * 180 / Math.PI; };
@@ -679,6 +679,7 @@ for (const [name, smi, want] of FLIPS) {
     else if (Math.hypot(...vsub(cen(m), cen(mol))) > 0.01) why = 'ring not moved onto the model ring';
     else if (g1.length !== g0.length || !g1.every((s, i) => s.ax !== g0[i].ax && s.up === g0[i].up)) why = 'groups not swapped axial/equatorial on the same faces';
     else if (!f.subs.filter(x => !x.h).every((s, i) => s.ax === g1[i].ax)) why = 'returned axial/equatorial does not match the coordinates';
+    else if (!c.subs.filter(x => x.h).every(s => chairs(m, atomInfo(m))[0].subs.find(x => x.sub === s.sub).up === s.up)) why = 'a ring H moved to the other face (H identity lost)';
   }
   if (why) fail++;
   console.log(why ? 'FAIL' : 'ok  ', 'flip', name.padEnd(26), f ? f.subs.filter(x => !x.h).map(s => (s.ax ? 'axial' : 'equatorial')).join(', ') : 'not available',
@@ -807,6 +808,8 @@ for (const [name, smi, want] of NMR) {
 // ---- Reactions tab. Products are compared with the textbook product as RDKit canonical isomeric SMILES; R/S and E/Z
 // come from RDKit's CIP labels on the product SMILES that chem.js returns.
 const rdCIP = s => { const m = RDKit.get_mol(s), t = JSON.parse(m.get_stereo_tags()); m.delete(); return t; };
+// A product as RDKit reads it from the molfile chem.js posts: stereo from the 3D coordinates, H removed, canonical SMILES.
+const rdMol = mf => { const m = RDKit.get_mol(mf, JSON.stringify({ removeHs: true })), c = m.get_smiles(); m.delete(); return c; };
 const rxMol = smi => { const b = build3D(OCL, smi); return { ...b, atoms: atomInfo(b.mol) }; };
 const rxHal = smi => { const b = rxMol(smi); return { ...b, hal: halides(OCL, b.mol, b.atoms) }; };
 // SN2 backside cone: more atoms in the nucleophile's path as the carbon gets more crowded
@@ -831,17 +834,17 @@ for (const [name, smi, rate, cip] of SN2) {
   if (sn2Rate(h) !== rate) bad.push(`rate ${sn2Rate(h)}`);
   if (!r) bad.push('no product');
   else {
-    if (rdCan(r.product.smiles) !== rdCan(invertBr(smi))) bad.push(`product ${r.product.smiles}, want ${invertBr(smi)}`);
+    if (rdMol(r.product.molfile) !== rdCan(invertBr(smi))) bad.push(`product ${rdMol(r.product.molfile)}, want ${invertBr(smi)}`);
     const t = rdCIP(invertBr(smi)).CIP_atoms.find(([i]) => i === h.c)?.[1][1] ?? ''; // heavy atoms keep the SMILES order
     if (t !== cip || (r.product.rs ?? '') !== cip) bad.push(`R/S ${r.product.rs} (RDKit ${t || 'none'})`);
   }
   if (name.startsWith('cis-1-bromo')) { // the ring pair turns from cis to trans
-    const was = stereo(OCL, mol, given).find(x => x.kind === 'ring')?.ct, p = r && build3D(OCL, r.product.smiles), now = p && stereo(OCL, p.mol, p.given).find(x => x.kind === 'ring')?.ct;
+    const was = stereo(OCL, mol, given).find(x => x.kind === 'ring')?.ct, p = r && build3D(OCL, rdMol(r.product.molfile)), now = p && stereo(OCL, p.mol, p.given).find(x => x.kind === 'ring')?.ct;
     if (was !== 'cis' || now !== 'trans') bad.push(`ring ${was} → ${now}`);
   }
   if (!bad.length) structuredClone({ hal, r });
   if (bad.length) fail++;
-  console.log(bad.length ? 'FAIL' : 'ok  ', 'SN2', name.padEnd(62), rate ?? 'no verdict', r ? r.product.smiles : '', r?.product.rs ?? '', bad.length ? `(${bad.join('; ')})` : '');
+  console.log(bad.length ? 'FAIL' : 'ok  ', 'SN2', name.padEnd(62), rate ?? 'no verdict', r ? rdMol(r.product.molfile) : '', r?.product.rs ?? '', bad.length ? `(${bad.join('; ')})` : '');
 }
 // No C–Cl, C–Br or C–I on an sp³ carbon: why
 for (const [name, smi, want] of [['fluoroethane', 'CCF', 'F'], ['ethanol', 'CCO', 'OH'], ['bromobenzene', 'Brc1ccccc1', 'sp2'], ['vinyl bromide', 'C=CBr', 'sp2'], ['butane', 'CCCC', '']]) {
@@ -875,9 +878,9 @@ for (const [name, smi, rate, shift, flat, rel, want = [], at] of SN1) {
     if (!r.cation || !!r.cation.flat !== flat) bad.push(`cation ${r.cation ? `${r.cation.sum.toFixed(1)}°` : 'not built'}`);
     if (!r.products) bad.push('no products');
     else {
-      const got = r.products.map(p => rdCan(p.smiles)), exp = want.map(rdCan);
-      if (got.some(g => !exp.includes(g)) || exp.some(e => !got.includes(e))) bad.push(`products ${r.products.map(p => p.smiles).join(' ')}`);
-      const [a, b] = r.products.map(p => p.smiles), rd = rdCan(a) === rdCan(b) ? 'same' : rdCan(a) === rdCan(b.replace(/@@?/g, x => (x === '@' ? '@@' : '@'))) ? 'enantiomers' : 'diastereomers';
+      const got = r.products.map(p => rdMol(p.molfile)), exp = want.map(rdCan);
+      if (got.some(g => !exp.includes(g)) || exp.some(e => !got.includes(e))) bad.push(`products ${got.join(' ')}`);
+      const [a, b] = got, rd = rdCan(a) === rdCan(b) ? 'same' : rdCan(a) === rdCan(b.replace(/@@?/g, x => (x === '@' ? '@@' : '@'))) ? 'enantiomers' : 'diastereomers';
       if (r.rel !== rel || rd !== rel) bad.push(`relation ${r.rel} (RDKit ${rd})`);
       r.products.forEach((p, i) => { const w = want[exp.indexOf(got[i])], l = w && (rdCIP(w).CIP_atoms.find(([j]) => j === at)?.[1][1] ?? null);
         if (w && (p.rs ?? null) !== l) bad.push(`R/S ${p.rs} (RDKit ${l})`); });
@@ -886,6 +889,45 @@ for (const [name, smi, rate, shift, flat, rel, want = [], at] of SN1) {
   }
   if (bad.length) fail++;
   console.log(bad.length ? 'FAIL' : 'ok  ', 'SN1', name.padEnd(42), rate, r?.cation ? `${r.cation.sum.toFixed(1)}°` : '', r?.rel ?? '', r?.products?.map(p => p.rs).join(' ') ?? '', `${(performance.now() - t).toFixed(0)}ms`, bad.length ? `(${bad.join('; ')})` : '');
+}
+// E2: [name, SMILES, textbook alkenes by β carbon (heavy-atom index: { SMILES of what its H give: 'all' | 'one' | 'none' }),
+// Zaitsev alkene ('' when all alkenes are alike substituted), can it form?, chair: the X axial or equatorial in the model]. Each H's alkene must match RDKit reading
+// the molfile (E/Z from the 3D), and its E/Z must be RDKit's CIP label. Menthyl chloride: only 2-menthene (toward CH₃),
+// against Zaitsev; neomenthyl chloride: 2- and 3-menthene, 3-menthene the Zaitsev one.
+const MENTHYL = 'C[C@@H]1CC[C@H]([C@@H](C1)Cl)C(C)C', NEOMENTHYL = 'C[C@@H]1CC[C@H]([C@H](C1)Cl)C(C)C';
+const M2 = 'C[C@@H]1CC[C@H](C=C1)C(C)C', M3 = 'C[C@@H]1CCC(=CC1)C(C)C'; // 2-menthene (C2=C3), 3-menthene (C3=C4)
+const E2 = [
+  ['(R)-2-bromobutane', 'C[C@@H](Br)CC', { 0: { 'C=CCC': 'all' }, 3: { 'C/C=C/C': 'one', 'C/C=C\\C': 'one' } }, 'C/C=C/C C/C=C\\C', true],
+  ['meso-1,2-dibromo-1,2-diphenylethane', 'Br[C@H](c1ccccc1)[C@@H](Br)c1ccccc1', { 8: { 'Br/C(c1ccccc1)=C/c1ccccc1': 'all' } }, '', true],
+  ['(1R,2R)-1,2-dibromo-1,2-diphenylethane', 'Br[C@H](c1ccccc1)[C@H](Br)c1ccccc1', { 8: { 'Br/C(c1ccccc1)=C\\c1ccccc1': 'all' } }, '', true],
+  ['menthyl chloride', MENTHYL, { 4: { [M3]: 'none' }, 6: { [M2]: 'one' } }, M3, false, 'equatorial'],
+  ['neomenthyl chloride', NEOMENTHYL, { 4: { [M3]: 'all' }, 6: { [M2]: 'one' } }, M3, true, 'axial'],
+  ['2-bromo-2-methylbutane', 'CCC(C)(C)Br', { 1: { 'CC=C(C)C': 'all' }, 3: { 'C=C(C)CC': 'all' }, 4: { 'C=C(C)CC': 'all' } }, 'CC=C(C)C', true],
+];
+for (const s of ['Br[C@H](c1ccccc1)[C@@H](Br)c1ccccc1', 'Br[C@H](c1ccccc1)[C@H](Br)c1ccccc1']) // meso: its own mirror image; (1R,2R)
+  if ((rdCan(s) === rdCan(s.replace(/@@?/g, x => (x === '@' ? '@@' : '@')))) !== s.includes('@@') || (!s.includes('@@') && rdCIP(s).CIP_atoms.map(([, l]) => l).join() !== '(R),(R)')) { fail++; console.log('FAIL E2 test SMILES', s); }
+for (const [name, smi, want, zaitsev, zOk, xChair] of E2) {
+  const { mol, hal, atoms } = rxHal(smi), h = hal.rows[0], ch = chairs(mol, atoms), t = performance.now(), r = e2(OCL, mol, atoms, ch, h.c, h.x), bad = [];
+  const molOf = i => r.hs.find(q => q.alkene === i)?.molfile, rdEZ = mf => { const m = RDKit.get_mol(mf, JSON.stringify({ removeHs: true })), b = JSON.parse(m.get_stereo_tags()).CIP_bonds; m.delete(); return b[0]?.[2]?.[1] ?? null; };
+  for (const [beta, outs] of Object.entries(want)) {
+    const qs = r.hs.filter(q => r.betas[q.beta] === +beta);
+    if (!qs.length) { bad.push(`no H on β ${beta}`); continue; }
+    for (const [w, how] of Object.entries(outs)) {
+      const give = qs.filter(q => q.alkene !== null && rdMol(molOf(q.alkene)) === rdCan(w)), okGive = give.filter(q => q.ok);
+      const n = how === 'all' ? qs.length : how === 'one' ? 1 : 0;
+      if (okGive.length !== n || (how === 'all' && give.length !== qs.length)) bad.push(`β ${beta} → ${w}: ${okGive.length} of ${qs.length} H`);
+    }
+  }
+  r.alkenes.forEach((a, i) => { const ez = rdEZ(molOf(i)); if (a.ez !== ez) bad.push(`alkene ${rdMol(molOf(i))} E/Z ${a.ez} (RDKit ${ez})`); });
+  const z = r.alkenes.map((a, i) => (a.zaitsev ? rdMol(molOf(i)) : null)).filter(Boolean).sort().join(' ');
+  if (z !== (zaitsev ? zaitsev.split(' ').map(rdCan).sort().join(' ') : '')) bad.push(`Zaitsev ${z}`); // '' = one kind of alkene only
+  if (r.alkenes.filter(a => a.zaitsev).some(a => a.possible !== zOk)) bad.push(`Zaitsev ${zOk ? 'cannot' : 'can'} form`);
+  if (xChair) { const s = ch.find(c => c.atoms.includes(h.c))?.subs.find(q => q.sub === h.x);
+    if (!s || (s.ax ? 'axial' : 'equatorial') !== xChair) bad.push(`Cl ${s ? (s.ax ? 'axial' : 'equatorial') : 'not on a chair'}`);
+    if (xChair === 'equatorial' && ch[0].subs.some(q => !q.h && q.ax)) bad.push('menthyl chloride not all equatorial'); }
+  if (!bad.length) structuredClone(r);
+  if (bad.length) fail++;
+  console.log(bad.length ? 'FAIL' : 'ok  ', 'E2', name.padEnd(40), r.alkenes.map((a, i) => `${rdMol(molOf(i))}${a.ez ? ` ${a.ez}` : ''}${a.possible ? '' : ' (no anti H)'}${a.zaitsev ? ' Zaitsev' : ''}`).join(', '), `${(performance.now() - t).toFixed(0)}ms`, bad.length ? `(${bad.join('; ')})` : '');
 }
 // Equivalent C–X bonds are listed once (meso-2,3-dibromobutane: mirror images; 1,2-dibromoethane), different ones apart
 for (const [smi, want] of [['C[C@@H](Br)[C@H](C)Br', 1], ['BrCCBr', 1], ['BrCCCl', 2], ['C[C@@H](Br)[C@@H](C)Br', 1]]) {

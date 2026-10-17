@@ -18,7 +18,8 @@ const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: 
   rguess: false, rpick: null, fguess: false, fdl: null, fpicks: {},
   // Reactions tab: rp = principle (-1 none, 0 SN2, 1 SN1, 2 E2, 3 addition), rx = C–X row; xguess/xpicks: guess first, picks by result key
   rp: -1, rx: 0, xguess: false, xpicks: {},
-  sn1v: 'cation' }; // SN1: show the carbocation or the two products
+  sn1v: 'cation', // SN1: show the carbocation or the two products
+  rh: -1 }; // E2: the β-H row picked
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -965,6 +966,7 @@ function rxReq() {
   const h = cur.hal.rows[state.rx];
   if (state.rp === 0 && h) return { kind: 'sn2', i: state.rx };
   if (state.rp === 1 && h && sn1Rate(h) !== 'none') return { kind: 'sn1', i: state.rx };
+  if (state.rp === 2 && h) return { kind: 'e2', i: state.rx };
   return null;
 }
 const rxKey = () => { const q = rxReq(); return q && JSON.stringify(q); };
@@ -975,6 +977,11 @@ function rxAtoms() {
   const h = cur.hal.rows[state.rx];
   if (state.rp === 0 && h) return [h.c, h.x, ...h.cone];
   if (state.rp === 1 && h) return [h.x, ...cur.atoms[h.c].nbrs];
+  if (state.rp === 2 && h) {
+    const r = rxRes(), p = e2Pick();
+    if (p) return [h.c, h.x, r.betas[p.row.beta], ...p.row.hs.map(i => r.hs[i].h)];
+    return [h.c, h.x, ...(r?.betas || []).flatMap(b => [b, ...cur.atoms[b].nbrs.filter(k => cur.atoms[k].el === 'H')])];
+  }
   return null;
 }
 
@@ -995,11 +1002,11 @@ async function rxView() {
 const viewTurn = (u, t) => { const q0 = viewer.getView().slice(4, 8); return qMul(qArc(qRot(q0, u), t), q0); };
 
 // Put the model back as built, add the intermediate or products beside it, and turn the view for the pick.
-function applyRx(animate = true) {
+function applyRx(animate = true, slide = animate) {
   if (state.tab !== 'reactions') return;
   const r = rxRes(), h = cur.hal.rows[state.rx];
   turn(null);
-  let models = [], q = null;
+  let models = [], q = null, shape = null;
   if (state.rp === 0 && h) {
     const C = home3d[h.c], X = home3d[h.x];
     q = viewTurn(unit(C.map((x, k) => x - X[k])), [-1, 0, 0]); // the back side to the left: the nucleophile comes in from there
@@ -1010,10 +1017,59 @@ function applyRx(animate = true) {
     if (r.cation) q = viewTurn(r.cation.n, [0, Math.cos(t), Math.sin(t)]); // the p orbital's axis up, tilted 20° toward you
     models = sn1View() === 'cation' ? [r.cation.molfile] : sn1View() === 'products' ? r.products.map(p => p.molfile) : [];
   }
+  const p = state.rp === 2 && h && e2Pick();
+  if (p) {
+    const b = r.betas[p.row.beta], ci = cur.chairs.findIndex(c => c.atoms.includes(h.c) && c.atoms.includes(b));
+    if (!p.q.ring) { // down Cα→Cβ with X up, so the anti H points down; turned 25° about the screen's up so the bond shows
+      const t = 12.5 * Math.PI / 180;
+      shape = p.q.xyz; q = qMul([0, Math.sin(t), 0, Math.cos(t)], lookDown(home3d[h.c], home3d[b], home3d[h.x]));
+    }
+    else if (ci >= 0) {
+      const t = 20 * Math.PI / 180;
+      q = viewTurn(ringFrame(cur.chairs[ci].atoms.map(i => home3d[i])).n, [0, Math.cos(t), Math.sin(t)]); // chair from the side
+      if (p.q.ok && !p.q.now) { if (!(ci in cur.flips)) e2Flip(ci); else if (cur.flips[ci]) shape = cur.flips[ci].xyz; } // X axial in the other chair
+    }
+    if (p.q.ok && p.q.molfile && e2Open()) models = [p.q.molfile];
+  }
   if (animate || !rxQ) rxQ = q; // the turn the models are placed for, kept while the view moves there
+  if (shape) { if (slide) morph(home3d, shape); else viewer.getModel(0).selectedAtoms({}).forEach((a, i) => { [a.x, a.y, a.z] = shape[i]; }); }
   rxModels(models, rxQ);
   draw();
   rxFrame(rxQ);
+}
+
+// E2: the H rows. H on one β carbon that give the same alkene with the same verdict share a row (a CH₃'s three H).
+function e2Rows(r) {
+  const rows = [];
+  r.hs.forEach((q, i) => {
+    const g = rows.find(x => x.beta === q.beta && x.alkene === q.alkene && x.ok === q.ok && x.now === q.now);
+    if (g) g.hs.push(i); else rows.push({ beta: q.beta, alkene: q.alkene, ok: q.ok, now: q.now, hs: [i] });
+  });
+  return rows;
+}
+// The picked row, its result and its first H (the one shown), or null.
+function e2Pick() {
+  const r = state.rp === 2 && rxRes(), row = r && e2Rows(r)[state.rh];
+  return row ? { r, row, q: r.hs[row.hs[0]] } : null;
+}
+const e2Key = () => `${rxKey()}:${state.rh}`;
+const e2Open = () => xOpen(e2Key());
+// The other chair for an H that is trans to X but equatorial with it now (the Shape tab's ring flip, shared cache).
+async function e2Flip(ci) {
+  if (flipping === ci) return;
+  const mol = cur;
+  flipping = ci;
+  const res = await ask({ flip: ci });
+  if (flipping === ci) flipping = -1;
+  if (res.stale || mol !== cur) return;
+  mol.flips[ci] = res.flip || null;
+  applyRx(false, true);
+}
+// Looking from F's side down the F→B bond, with F→U pointing up the screen (as alignBond does for the Newman view).
+function lookDown(F, B, U) {
+  const q0 = viewer.getView().slice(4, 8), q1 = qMul(qArc(qRot(q0, unit(B.map((c, j) => c - F[j]))), [0, 0, -1]), q0);
+  const v = qRot(q1, U.map((c, j) => c - F[j])), h = (Math.PI / 2 - Math.atan2(v[1], v[0])) / 2;
+  return qMul([0, 0, Math.sin(h), Math.cos(h)], q1);
 }
 let rxQ = null;
 
@@ -1077,6 +1133,13 @@ function drawRx() {
   }
   if (state.rp === 1 && h && rxShown() && sn1View() === 'products')
     r.products.forEach((p, i) => { if (p.rs) rxTag(p.rs, P3(r.cation.center, i + 1)); });
+  if (state.rp === 2 && h && r) { // α and β1, β2 … on the model; a rod joins the picked H and X once they sit anti
+    rxTag('α', P3(h.c), '--fg', { x: -26, y: 8 });
+    r.betas.forEach((b, i) => rxTag(`β${i + 1}`, P3(b), '--fg', { x: 8, y: 8 }));
+    const p = e2Pick();
+    const anti = p && (!p.q.ring ? true : p.q.now || (p.q.ok && cur.flips[cur.chairs.findIndex(c => c.atoms.includes(h.c) && c.atoms.includes(r.betas[p.row.beta]))]));
+    if (anti) rxShapes.push(viewer.addCylinder({ start: xyz3(P3(p.q.h)), end: xyz3(P3(h.x)), radius: 0.06, color: tok('--accent'), opacity: 0.6, dashed: true }));
+  }
 }
 
 // SN1 view: 'cation' (flat ones only), 'products' (once guessed, in guess mode), or null (nothing to show yet).
@@ -1112,7 +1175,7 @@ function buildReact() {
     const names = [...others.filter(k => cur.atoms[k].el !== 'H'), ...others.filter(k => cur.atoms[k].el === 'H')].map(plain);
     row.innerHTML = `<span>${esc(`C–${h.el} on a ${degName(h)}`)}</span><span class="sub">${esc(`On the carbon: ${names.join(', ')}`)}</span>`;
     row.dataset.i = String(i);
-    row.addEventListener('click', () => { state.rx = i; rxView(); });
+    row.addEventListener('click', () => { state.rx = i; state.rh = -1; rxView(); });
     box.appendChild(row);
   });
 }
@@ -1133,8 +1196,13 @@ function showReact() {
   const h = cur.hal.rows[state.rx], r = rxRes(), busy = rxBusy === rxKey();
   if (state.rp === 0) out.innerHTML = sn2HTML(h, r, busy);
   if (state.rp === 1) out.innerHTML = sn1HTML(h, r, busy);
+  if (state.rp === 2) out.innerHTML = e2HTML(h, r, busy);
+  out.querySelectorAll('[data-rh]').forEach(b => b.addEventListener('click', () => { const i = +b.dataset.rh; state.rh = state.rh === i ? -1 : i; applyRx(true); }));
   out.querySelectorAll('[data-sn1v]').forEach(b => b.addEventListener('click', () => { state.sn1v = b.dataset.sn1v; applyRx(false); }));
-  out.querySelectorAll('[data-xpick]').forEach(b => b.addEventListener('click', () => { state.xpicks[rxKey()] = b.dataset.xpick; draw(); }));
+  out.querySelectorAll('[data-xpick]').forEach(b => b.addEventListener('click', () => { // a pick can open models (products, the alkene)
+    state.xpicks[state.rp === 2 ? e2Key() : rxKey()] = b.dataset.xpick;
+    if (state.rp) applyRx(false, false); else draw();
+  }));
 }
 
 function sn2HTML(h, r, busy) {
@@ -1192,9 +1260,58 @@ function sn1HTML(h, r, busy) {
     + '<p class="small">A carbon radical is flat (or nearly) too, so a reaction through a radical at this carbon reaches both faces the same way.</p>';
 }
 
+const SUBST = ['unsubstituted', 'monosubstituted', 'disubstituted', 'trisubstituted', 'tetrasubstituted'];
+const alkeneName = a => `C=C to β${a.beta + 1}${a.ez ? ` (${a.ez})` : ''}`;
+const E2_WHY = {
+  open: (x) => `Turn the C–C bond until this H is anti to ${x}`,
+  now: (x) => `Axial, anti to the axial ${x}: ready now`,
+  flip: (x) => `Trans to ${x}, both equatorial now: a ring flip puts both axial`,
+  cis: (x) => `Cis to ${x}: never anti, so no E2 with this H`,
+  chair: () => 'In a ring that is not a chair in this model: no verdict',
+};
+const e2Why = q => (!q.ring ? 'open' : q.ok === null ? 'chair' : !q.ok ? 'cis' : q.now ? 'now' : 'flip');
+
+function e2HTML(h, r, busy) {
+  let s = `<p class="small">E2 is one step: a strong base takes an H from a β carbon (next to the C–${h.el} carbon α) as ${h.el}⁻ leaves. The C–H and C–${h.el} bonds must be anti-periplanar: in one plane and pointing opposite ways (H–C–C–${h.el} 180°), so the electrons of the C–H bond push ${h.el} out from the back. E2 needs a strong base, and it competes with S<sub>N</sub>2.</p>`;
+  if (busy || r === undefined) return s + '<p class="small">Building the alkenes…</p>';
+  if (!r) return s + '<p class="small">The alkenes could not be built in 3D here.</p>';
+  if (!r.hs.length) return s + '<p class="facts">No H on a β carbon (an sp³ carbon next to the C–X carbon), so no E2.</p>';
+  const rows = e2Rows(r), name = b => plain(r.betas[b]);
+  s += '<div class="rows" role="group" aria-label="Pick a β H">' + rows.map((row, i) => {
+    const same = rows.filter(x => x.beta === row.beta), n = row.hs.length, j = same.indexOf(row) + 1;
+    const which = n > 1 ? ` · any of its ${n} H` : same.length > 1 ? ` · H ${j} of ${same.length}` : '';
+    return `<button data-rh="${i}" aria-pressed="${state.rh === i}"><span>${esc(`H on β${row.beta + 1} (${name(row.beta)})${which}`)}</span><span class="sub">${esc(E2_WHY[e2Why(r.hs[row.hs[0]])](h.el))}</span></button>`;
+  }).join('') + '</div>';
+  const p = e2Pick(), k = e2Key();
+  if (p) {
+    const q = p.q, why = e2Why(q), al = q.alkene !== null ? r.alkenes[q.alkene] : null;
+    const ci = cur.chairs.findIndex(c => c.atoms.includes(h.c) && c.atoms.includes(r.betas[p.row.beta])), f = cur.flips[ci];
+    if (why === 'open') s += `<p class="facts">Turned about the Cα–Cβ bond so this H sits anti to ${h.el} (H–C–C–${h.el} 180°), as in a Newman view down the bond. The groups that sit gauche end up cis on the C=C.</p>`;
+    if (why === 'now') s += `<p class="facts">This H and ${h.el} are both axial, on opposite faces: anti-periplanar in this chair.</p>`;
+    if (why === 'flip') s += `<p class="facts">This H and ${h.el} are trans, but both equatorial in this chair: a ring flip puts ${h.el} axial, and this H with it.</p>`
+      + (flipping === ci ? '<p class="small">Looking for the other chair…</p>' : f ? '<p class="small">Showing the flipped chair. The slide is a straight line; a real ring flip passes through half-chair and twist-boat forms.</p>'
+        : f === null ? '<p class="small">Flip not available: the conformer search (OpenChemLib) did not build the other chair, as happens when a group larger than CH₃ or OH would turn axial. The chair is not shown.</p>' : '');
+    if (why === 'cis') s += `<p class="facts">This H is cis to ${h.el}, on the same face of the ring. In a chair, cis neighbors are one axial and one equatorial, so they are never anti: no E2 with this H.</p>`;
+    if (why === 'chair') s += '<p class="facts">This bond is in a ring that is not a chair in this model, so the page gives no verdict for it.</p>';
+    if (state.xguess && !xOpen(k)) {
+      const opts = r.alkenes.map((a, i) => a && [String(i), alkeneName(a)]).filter(Boolean);
+      if (r.hs.some(x => x.ok === false)) opts.push(['none', 'No alkene: cannot be anti']);
+      return s + '<p class="facts">Which alkene does this H give? Pick one.</p><div class="row">' + opts.map(([v, t]) => `<button data-xpick="${v}">${esc(t)}</button>`).join('') + '</div>';
+    }
+    const answer = q.ok && al ? String(q.alkene) : 'none';
+    if (state.xguess) s += verdictLine(state.xpicks[k], answer, answer === 'none' ? 'this H cannot be anti, so it gives no alkene' : `it gives the ${esc(alkeneName(al))}`);
+    if (q.ok && al) s += `<p class="facts">Alkene, on the right: <b>${esc(alkeneName(al))}</b>, ${SUBST[al.subst]}${al.ez ? '' : ', no E/Z'}.</p>`;
+  }
+  const can = r.alkenes.filter(a => a?.possible), z = r.alkenes.filter(a => a?.zaitsev);
+  s += '<p class="facts">Alkenes E2 can give here:</p><ul class="angles">' + (can.length ? can.map(a => `<li><span>${esc(alkeneName(a))}, ${SUBST[a.subst]}</span><b>${a.zaitsev ? 'Zaitsev' : ''}</b></li>`).join('') : '<li><span>None: no β H can sit anti</span></li>') + '</ul>';
+  if (z.some(a => a.possible)) s += '<p class="small">Zaitsev: the more substituted alkene is usually major with a small base (OH⁻, CH₃O⁻). With a bulky base such as tert-butoxide, the less substituted one is usually major (Hofmann).</p>';
+  else if (z.length) s += `<p class="facts">The more substituted alkene (${esc(z.map(a => alkeneName(a)).join(', '))}) cannot form: no H on that carbon can sit anti to ${h.el}. So E2 gives the less substituted alkene here, against Zaitsev's rule.</p>`;
+  return s;
+}
+
 document.querySelectorAll('#rprin button').forEach(b => b.addEventListener('click', () => {
   const i = +b.dataset.rp;
-  state.rp = state.rp === i ? -1 : i;
+  state.rp = state.rp === i ? -1 : i; state.rh = -1;
   rxView();
 }));
 $('btn-xguess').addEventListener('click', e => {
@@ -1249,7 +1366,7 @@ async function run(name) {
 
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })), flips: {}, rxr: {} }; // flips[i]: the other chair of chair i, null if none
-    state.rx = 0; state.xpicks = {}; rxBusy = null; rxQ = null;
+    state.rx = 0; state.rh = -1; state.xpicks = {}; rxBusy = null; rxQ = null;
     state.hl = state.atom = state.st = state.bond = state.ring = state.chair = -1; state.tries = {}; state.stries = {}; state.ctries = {}; state.flipped = state.sliding = false;
     state.ar = -1; state.ppick = state.npick = null;
     state.plane = false; planeBusy = false; state.rpick = state.fdl = null; state.fpicks = {};
