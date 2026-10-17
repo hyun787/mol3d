@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, newmanBonds, conformer, ringAngles } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, newmanBonds, conformer, ringAngles, stericPairs } from './chem.js';
 import { resolveName } from './lookup.js';
 
 OCL.Resources.registerFromNodejs();
@@ -322,22 +322,28 @@ function textbookLevels(mol, { atoms: [F, B], front, back, x, phi0 }) {
   const r = flat(x[0]), s = [u[1] * r[2] - u[2] * r[1], u[2] * r[0] - u[0] * r[2], u[0] * r[1] - u[1] * r[0]];
   const th = a => { const v = flat(a); return Math.atan2(vdot(v, s), vdot(v, r)) * 180 / Math.PI; };
   const heavy = a => mol.getAtomicNo(a) !== 1;
+  const close = []; // non-H/non-H pairs that are eclipsed or gauche at each form: the steric-strain count
   const E = [0, 60, 120, 180, 240, 300].map(phi => {
-    let e = 0;
+    let e = 0, n = 0;
     for (const f of front) for (const b of back) {
       const d = Math.abs(((th(b) + phi - phi0 - th(f)) % 360 + 540) % 360 - 180); // 0 = eclipsed, 180 = anti
+      if (d < 90 && heavy(f) && heavy(b)) n++;
       if (d < 30) e += heavy(f) && heavy(b) ? INC.XX : heavy(f) || heavy(b) ? INC.HX : INC.HH;
       else if (d < 90 && heavy(f) && heavy(b)) e += INC.gauche;
     }
+    close.push(n);
     return Math.round(e * 10);
   });
   const keys = [...new Set(E)].sort((p, q) => p - q);
-  return E.map(k => keys.indexOf(k));
+  return Object.assign(E.map(k => keys.indexOf(k)), { close });
 }
 for (const [name, smi, want, ranked] of NEWMAN) {
   const { mol } = build3D(OCL, smi), bonds = newmanBonds(OCL, mol, atomInfo(mol));
   const got = bonds.map(b => b.atoms.join('-') + (b.ref ? '*' : '')).join(' ');
-  const bad = bonds.filter(b => ranked ? b.levels?.join() !== textbookLevels(mol, b).join() : b.levels);
+  // ranked: order and steric pairs at each form both match the independent check; unranked: no order, no steric pairs
+  const bad = bonds.filter(b => ranked
+    ? b.levels?.join() !== textbookLevels(mol, b).join() || [0, 60, 120, 180, 240, 300].map(p => stericPairs(b, p).length).join() !== textbookLevels(mol, b).close.join()
+    : b.levels || [0, 30, 60].some(p => stericPairs(b, p).length));
   const ok = got === want && !bad.length;
   if (!ok) fail++;
   console.log(ok ? 'ok  ' : 'FAIL', 'newman', name.padEnd(20), got || '(none)', bonds.map(b => b.levels?.join('') ?? '-').join(' '),
@@ -346,6 +352,14 @@ for (const [name, smi, want, ranked] of NEWMAN) {
 // Butane C2–C3 by hand: 0° (CH3/CH3 eclipsed) > 120° = 240° (H/CH3 eclipsed) > 60° = 300° (gauche) > 180° (anti)
 const bu = newmanBonds(OCL, build3D(OCL, 'CCCC').mol, atomInfo(build3D(OCL, 'CCCC').mol))[1];
 if (bu.levels.join('') !== '312021' || Math.abs(bu.phi0 - 180) > 2) { fail++; console.log('FAIL butane C2–C3 order', bu.levels, bu.phi0); }
+// Butane C2–C3 steric pairs by slider angle: the two CH3 carbons (atoms 0 and 3) from gauche to eclipsed, none from 70° to 290°
+for (const [phi, want] of [[0, 1], [30, 1], [60, 1], [65, 1], [70, 0], [120, 0], [180, 0], [240, 0], [295, 1], [300, 1]]) {
+  const got = stericPairs(bu, phi);
+  if (got.length !== want || (want && got[0].slice(0, 2).sort().join() !== '0,3')) { fail++; console.log('FAIL butane steric pairs at', phi, got, `(want ${want})`); }
+}
+const ethB = newmanBonds(OCL, build3D(OCL, 'CC').mol, atomInfo(build3D(OCL, 'CC').mol))[0];
+if ([0, 60].some(p => stericPairs(ethB, p).length)) { fail++; console.log('FAIL ethane has no steric pairs'); }
+
 // What the slider position shows: [phi, references?, expected]
 for (const [phi, ref, want] of [[180, true, 'staggered anti'], [60, true, 'staggered gauche'], [300, true, 'staggered gauche'],
   [0, true, 'eclipsed'], [355, true, 'eclipsed'], [120, false, 'eclipsed'], [63, true, 'staggered gauche'], [66, true, 'between'],

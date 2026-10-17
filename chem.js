@@ -392,21 +392,30 @@ export function newmanBonds(OCL, mol, atoms) {
     const slot = (a, c, zero) => Math.round(((ang(a, c) - zero + 360) % 360) / 120) * 120 % 360; // 0, 120 or 240
     const side = new Set([B]);
     for (const a of side) for (const n of nbrs(mol, a)) if (n !== F) side.add(n); // the bond is not in a ring
-    let levels = null;
+    let levels = null, xx = null;
     if ([...front, ...back].every(a => isH(a) || sp3C(a))) {
-      const fx = heavy(front).map(a => slot(a, F, 0)), bx = heavy(back).map(a => slot(a, B, phi0));
+      // xx: each non-H/non-H pair as [front atom, back atom, offset]; at slider angle phi their Newman angle is phi + offset
+      xx = heavy(front).flatMap(f => heavy(back).map(k => [f, k, slot(k, B, phi0) - slot(f, F, 0)]));
       const key = [0, 60, 120, 180, 240, 300].map(phi => {
         const ecl = phi % 120 === 0;
-        let n = 0;
-        for (const p of fx) for (const q of bx) { const d = (phi + q - p + 720) % 360; if (ecl ? d === 0 : d === 60 || d === 300) n++; }
+        const n = xx.filter(([, , o]) => { const d = (phi + o + 720) % 360; return ecl ? d === 0 : d === 60 || d === 300; }).length;
         return (ecl ? 100 : 0) + n;
       });
       const keys = [...new Set(key)].sort((p, q) => p - q);
       levels = key.map(k => keys.indexOf(k));
     }
-    out.push({ atoms: [F, B], front, back, x, ref, phi0, side: [...side], levels });
+    out.push({ atoms: [F, B], front, back, x, ref, phi0, side: [...side], levels, xx });
   }
   return out;
+}
+
+// Steric (van der Waals) strain at slider angle phi: the non-H/non-H pairs of a ranked bond whose Newman angle is 65° or
+// less, from gauche (60° ± 5°) down to eclipsed. Returns [front atom, back atom, angle 0–180°] for each pair.
+// Pairs with H are left out: in the textbook split (McMurry), CH3/CH3 gauche is steric strain, CH3/CH3 eclipsed is
+// torsional + steric, and H/CH3 eclipsed is mostly torsional.
+export function stericPairs(bond, phi) {
+  return (bond.xx || []).map(([f, k, o]) => { const d = ((phi + o) % 360 + 360) % 360; return [f, k, Math.min(d, 360 - d)]; })
+    .filter(([, , a]) => a <= 65);
 }
 
 // The form at slider angle phi (the x-pair dihedral): staggered or eclipsed within 5°, otherwise in between (kind null).
