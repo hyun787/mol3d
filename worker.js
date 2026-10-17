@@ -1,6 +1,6 @@
 // Runs the slow chemistry (3D build, group search, ring flips) off the main thread so the page stays responsive.
 import OCL from 'https://cdn.jsdelivr.net/npm/openchemlib@9.25.1/dist/openchemlib.js';
-import { build3D, findGroups, atomInfo, kitParts, stereo, superimposable, relation, isMeso, mirrorPlane, cipCenters, newmanBonds, ringAngles, chairs, flipChair, polarity, aromaticRings, equivalentH } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, superimposable, relation, isMeso, mirrorPlane, cipCenters, fischer, newmanBonds, ringAngles, chairs, flipChair, polarity, aromaticRings, equivalentH } from './chem.js';
 
 const ready = OCL.Resources.registerFromUrl('https://cdn.jsdelivr.net/npm/openchemlib@9.25.1/dist/resources.json');
 let last = null; // the last molecule built: a ring flip ({flip: chair index}) and a comparison ({compare: SMILES}) work on it
@@ -27,7 +27,7 @@ onmessage = async ({ data: { id, smiles, flip, compare, plane } }) => {
     const { mol, stripped, minimized, given } = build3D(OCL, smiles);
     const atoms = atomInfo(mol);
     last = { mol, given, chairs: chairs(mol, atoms) };
-    const pol = polarity(mol);
+    const pol = polarity(mol), st = stereo(OCL, mol, given);
     let charge = 0;
     for (let i = 0; i < mol.getAllAtoms(); i++) charge += mol.getAtomCharge(i);
     postMessage({
@@ -37,7 +37,8 @@ onmessage = async ({ data: { id, smiles, flip, compare, plane } }) => {
       groups: findGroups(OCL, mol).map(({ group, matches, atoms }) => ({ id: group.id, count: matches.length, atoms })),
       atoms,
       kit: kitParts(mol),
-      stereo: stereo(OCL, mol, given),
+      stereo: st,
+      fischer: fischer(OCL, mol, st),
       superimposable: superimposable(mol),
       meso: isMeso(OCL, mol),
       bonds: newmanBonds(OCL, mol, atoms),

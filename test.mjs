@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, isMeso, mirrorPlane, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, isMeso, mirrorPlane, fischer, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH } from './chem.js';
 const dihedralOf = (m, a, b, c, d) => { const p = i => [m.getAtomX(i), m.getAtomY(i), m.getAtomZ(i)], s = (u, v) => u.map((x, k) => x - v[k]), cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
   const b2 = s(p(c), p(b)), n1 = cr(s(p(b), p(a)), b2), n2 = cr(b2, s(p(d), p(c))), x = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2], y = cr(n1, n2).reduce((t, v, k) => t + v * b2[k], 0) / Math.hypot(...b2);
   return Math.atan2(y, x) * 180 / Math.PI; };
@@ -410,6 +410,49 @@ for (const [name, smi, want] of MESO) {
   console.log(ok ? 'ok  ' : 'FAIL', 'meso plane', name.padEnd(46), got, r ? `(${r.how}, worst ${r.worst.toFixed(2)} Å)` : '', `${ms}ms`, ok ? '' : `(want ${want}${why ? `; ${why}` : ''})`);
 }
 { const m = build3D(OCL, 'C[C@@H]1CCC[C@H](C)C1').mol; structuredClone(mirrorPlane(OCL, m)); } // the worker posts it
+
+// ---- Fischer projection: [name, SMILES, rows top to bottom (left|right at each cross), D/L, meso look]
+// A drawing turned 180° in the page is the same configuration, so that form also passes (meso-tartaric acid either way).
+// R/S is read off the drawing itself (vertical groups back, horizontal ones forward, chem.js priorities) and must match
+// chem.js's R/S from the 3D model, which test.mjs checks against RDKit above.
+const FISCHER = [
+  ['D-glyceraldehyde', 'C([C@H](C=O)O)O', 'CHO / H|OH / CH2OH', 'D'], ['L-alanine', 'C[C@@H](C(=O)O)N', 'COOH / NH2|H / CH3', 'L'],
+  ['D-glucose', SMI['D-glucose'], 'CHO / H|OH / OH|H / H|OH / H|OH / CH2OH', 'D'], ['L-glucose', SMI['L-glucose'], 'CHO / OH|H / H|OH / OH|H / OH|H / CH2OH', 'L'],
+  ['D-galactose', SMI['D-galactose'], 'CHO / H|OH / OH|H / OH|H / H|OH / CH2OH', 'D'], ['D-fructose', 'OC[C@@H](O)[C@@H](O)[C@H](O)C(=O)CO', 'CH2OH / C=O / OH|H / H|OH / H|OH / CH2OH', 'D'],
+  ['L-serine', 'C([C@@H](C(=O)O)N)O', 'COOH / NH2|H / CH2OH', 'L'], ['L-threonine (L by C2, the α-carbon)', 'C[C@H]([C@@H](C(=O)O)N)O', 'COOH / NH2|H / H|OH / CH3', 'L'],
+  ['L-alanine zwitterion', 'C[C@@H](C(=O)[O-])[NH3+]', 'COO⁻ / NH3⁺|H / CH3', 'L'],
+  ['(2R,3R)-tartaric acid', SMI['(2R,3R)-tartaric acid'], 'COOH / H|OH / OH|H / COOH', ''], ['meso-tartaric acid', SMI['meso-tartaric acid'], 'COOH / H|OH / H|OH / COOH', '', true],
+  ['meso-2,3-dibromobutane', 'C[C@@H](Br)[C@H](C)Br', 'CH3 / H|Br / H|Br / CH3', '', true], ['meso-2,4-pentanediol', 'C[C@@H](O)C[C@H](C)O', 'CH3 / H|OH / CH2 / H|OH / CH3', '', true],
+  ['(R)-2-butanol', SMI['(R)-2-butanol'], 'CH3 / OH|H / CH2CH3', ''], ['(S)-2-butanol', SMI['(S)-2-butanol'], 'CH3 / H|OH / CH2CH3', ''],
+  ['3-chlorobutan-2-ol: OH end on top', 'C[C@@H](O)[C@@H](C)Cl', 'CH3 / OH|H / H|Cl / CH3', ''], ['L-leucine', 'CC(C)C[C@@H](C(=O)O)N', 'COOH / NH2|H / CH2CH(CH3)2', 'L'],
+  ['cis-1,2-dimethylcyclohexane', SMI['cis-1,2-dimethylcyclohexane'], 'ring', ''], ['menthol', 'C[C@@H]1CC[C@H]([C@@H](C1)O)C(C)C', 'ring', ''], ['ethanol', 'CCO', 'none', ''],
+];
+const fRows = f => f.why || f.rows.map(r => (r.cross ? `${r.left.label}|${r.right.label}` : r.label)).join(' / ');
+const turned180 = s => s.split(' / ').reverse().map(x => (x.includes('|') ? x.split('|').reverse().join('|') : x)).join(' / ');
+const IDEAL = { up: [0, 1, -1], down: [0, -1, -1], left: [-1, 0, 1], right: [1, 0, 1] };
+for (const [name, smi, want, dl, meso = false] of FISCHER) {
+  const { mol, given } = build3D(OCL, smi), rows = stereo(OCL, mol, given), f = fischer(OCL, mol, rows), got = fRows(f);
+  const bad = [];
+  if (got !== want && turned180(got) !== want) bad.push(`rows ${got}`);
+  if ((f.dl?.dl || '') !== dl) bad.push(`D/L ${f.dl?.dl || 'none'}`);
+  if (!f.why && (f.mirror !== null) !== meso) bad.push(`mirror ${f.mirror}`);
+  for (const r of f.rows || []) {
+    if (!r.cross || !r.rs) continue;
+    const at = { [r.up]: IDEAL.up, [r.down]: IDEAL.down, [r.left.atom]: IDEAL.left, [r.right.atom]: IDEAL.right };
+    const [v1, v2, v3, v4] = cipOrder(mol, r.atom).map(a => at[a]), s = (p, q) => p.map((x, k) => x - q[k]);
+    const a = s(v1, v4), b = s(v2, v4), c = s(v3, v4), drawn = a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2]) + a[2] * (b[0] * c[1] - b[1] * c[0]) < 0 ? 'R' : 'S';
+    if (drawn !== r.rs) bad.push(`drawing reads ${drawn} at atom ${r.atom}, model ${r.rs}`);
+  }
+  const ok = !bad.length;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'fischer', name.padEnd(36), got, f.dl ? `[${f.dl.dl}]` : '', f.mirror !== null && f.mirror !== undefined ? '[mirror]' : '', ok ? '' : `(${bad.join('; ')}; want ${want} ${dl})`);
+}
+{ // the drawing comes from the configuration, so another conformation (D-glucose, seed 5) draws the same
+  const b = build3D(OCL, SMI['D-glucose']), m = new OCL.ConformerGenerator(5).getOneConformerAsMolecule(OCL.Molecule.fromSmiles(SMI['D-glucose']));
+  const one = fRows(fischer(OCL, b.mol, stereo(OCL, b.mol, b.given))), two = fRows(fischer(OCL, m, stereo(OCL, m, b.given)));
+  if (one !== two) { fail++; console.log('FAIL fischer: D-glucose in another conformation draws', two, 'not', one); }
+  structuredClone(fischer(OCL, b.mol, stereo(OCL, b.mol, b.given))); // the worker posts it
+}
 
 // ---- Shape tab: Newman bonds, one per symmetry class: [name, SMILES, 'front-back' bonds (* = anti/gauche references), ranked]
 const NEWMAN = [

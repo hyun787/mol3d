@@ -90,6 +90,7 @@ function draw() {
   showNMR();
   showCenter();
   showPlane();
+  showFischer();
   showRel();
   showNewman();
   showChair();
@@ -759,6 +760,72 @@ $('cmp-form').addEventListener('submit', async e => {
   }
 });
 $('btn-side').addEventListener('click', () => setSide(!state.side));
+
+// ---- Fischer projection (Stereo tab): drawn from chem.js fischer() as SVG, with R/S beside each stereocenter.
+const FISCHER_WHY = {
+  none: 'No stereocenter, so there is no Fischer projection to draw.',
+  ring: 'No Fischer projection: the stereocenters are in a ring.',
+  chain: 'No Fischer projection: the stereocenters are not all on one carbon chain.',
+  end: 'No Fischer projection here: a stereocenter needs a carbon above and below it on the chain.',
+};
+// A group on the left of a cross reads toward the center: OH → HO, NH₂ → H₂N, CHO → OHC, COOH → HOOC, CH₂OH → HOH₂C.
+function leftLabel(t) {
+  const units = t.match(/[A-Z][a-z]?(?:H\d*)?[⁺⁻]?/g) || [];
+  if (t === 'H' || units.join('') !== t) return t; // parentheses, =, or a ring formula: as is
+  const flip = u => u.replace(/^([A-Z][a-z]?)(H\d*)([⁺⁻]?)$/, '$2$1$3');
+  const r = units.reverse();
+  r[0] = flip(r[0]); if (r.length > 1) r[r.length - 1] = flip(r[r.length - 1]);
+  return r.join('');
+}
+const RH = 46, FP = 24, FX = 122, FW = 300; // row height, padding, the vertical line's x, width
+function fischerSVG(f, show) {
+  const n = f.rows.length, H = 2 * FP + (n - 1) * RH, Y = i => FP + i * RH;
+  const text = (x, y, s, anchor = 'middle') => `<text x="${x}" y="${y + 5}" text-anchor="${anchor}">${esc(SUB(s))}</text>`;
+  let lines = '', words = '', tags = '';
+  if (f.mirror !== null) lines += `<line class="mp" x1="8" x2="${FW - 44}" y1="${FP + f.mirror * RH}" y2="${FP + f.mirror * RH}"/>`;
+  for (let i = 0; i + 1 < n; i++) lines += `<line x1="${FX}" x2="${FX}" y1="${Y(i) + (f.rows[i].cross ? 0 : 12)}" y2="${Y(i + 1) - (f.rows[i + 1].cross ? 0 : 12)}"/>`;
+  f.rows.forEach((r, i) => {
+    if (!r.cross) { words += text(FX, Y(i), r.label); return; }
+    lines += `<line x1="${FX - 44}" x2="${FX + 44}" y1="${Y(i)}" y2="${Y(i)}"/>`;
+    words += text(FX - 50, Y(i), leftLabel(r.left.label), 'end') + text(FX + 50, Y(i), r.right.label, 'start');
+    if (r.rs && show(i)) tags += `<rect x="${FW - 34}" y="${Y(i) - 12}" width="24" height="24" rx="5"/><text x="${FW - 22}" y="${Y(i) + 5}" text-anchor="middle">${r.rs}</text>`;
+  });
+  const said = f.rows.map(r => (r.cross ? `${r.left.label} left, ${r.right.label} right${r.rs && show(f.rows.indexOf(r)) ? ` (${r.rs})` : ''}` : r.label)).join('; ');
+  return `<svg viewBox="0 0 ${FW} ${H}" role="img" aria-label="${esc(`Fischer projection, top to bottom: ${said}`)}">
+    <g stroke="var(--fg)" stroke-width="1.6" stroke-linecap="round">${lines}</g>
+    <g font-family="var(--sans)" font-size="15" fill="var(--fg)" stroke="var(--bg)" stroke-width="5" paint-order="stroke" stroke-linejoin="round">${words}</g>
+    <g class="tags" font-family="var(--sans)" font-size="14" font-weight="600">${tags}</g></svg>`;
+}
+
+function showFischer() {
+  const f = cur.fischer, box = $('fischer'), out = $('fischer-out');
+  const one = f.rows ? f.rows.filter(r => r.cross) : [];
+  $('fischer-tools').hidden = one.length !== 1;
+  if (f.why) { box.innerHTML = `<p class="facts">${esc(FISCHER_WHY[f.why])}</p>`; out.textContent = ''; return; }
+  const show = i => !state.guess || revealed(f.rows[i].row);
+  box.innerHTML = fischerSVG(f, show);
+  const notes = [];
+  if (f.dl) notes.push(`<p class="facts"><b>${f.dl.dl}</b>-${f.dl.kind === 'sugar' ? 'sugar: the OH on the lowest stereocenter points' : 'amino acid: the NH₂ on the α-carbon points'} ${f.dl.dl === 'D' ? 'right' : 'left'}.</p>`);
+  if (f.mirror !== null) notes.push('<p class="facts">The top half mirrors the bottom half across the dashed line: a meso compound.</p>');
+  if (f.ringLeft) notes.push('<p class="small">Stereocenters in a ring are left out.</p>');
+  if (f.open) notes.push('<p class="small">Some stereocenters are not set in the source structure, so this shows the ones the 3D build picked.</p>');
+  out.innerHTML = notes.join('');
+}
+
+// One stereocenter: turn the model so its chain neighbors point up-and-back and down-and-back and its other two groups
+// come toward the viewer, as the cross draws it. Only the view turns; the coordinates stay.
+function fischerView() {
+  const r = cur.fischer.rows.find(x => x.cross), P = i => { const a = atomAt(i); return [a.x, a.y, a.z]; };
+  const c = P(r.atom), u = P(r.up).map((x, k) => x - c[k]), d = P(r.down).map((x, k) => x - c[k]);
+  const y = unit(u.map((x, k) => x - d[k])), b = u.map((x, k) => -(x + d[k])), t = b[0] * y[0] + b[1] * y[1] + b[2] * y[2];
+  const zv = unit(b.map((x, k) => x - t * y[k])); // toward the viewer: away from where the two vertical bonds point
+  const mirror = state.mirror, side = state.side;
+  if (mirror) setMirror(false, false);
+  if (side) setSide(false, false);
+  const v = viewer.getView(), q1 = qMul(qArc(qRot(v.slice(4, 8), y), [0, 1, 0]), v.slice(4, 8)), q2 = qMul(qArc(qRot(q1, zv), [0, 0, 1]), q1);
+  animateView([-c[0], -c[1], -c[2], v[3], ...q2], 600, mirror ? () => setMirror(true) : side ? () => setSide(true) : null);
+}
+$('btn-fview').addEventListener('click', fischerView);
 
 // ---- Meso mirror plane (Stereo tab): found in the worker on real coordinates. When the model as built has none, the
 // worker turns single bonds (or tries other conformers) until one shows, and the model slides there; off slides it back.
