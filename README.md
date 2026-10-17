@@ -16,6 +16,7 @@ Type a compound name and see the molecule in 3D, with buttons for the functional
    - **Shape:** conformations and ring strain.
      - **Newman:** each C–C single bond outside a ring with two sp³ carbons (one per symmetry class). Tap one to look straight down it, front carbon toward you; a slider turns the back carbon, and the page says staggered or eclipsed, plus anti or gauche when each carbon carries exactly one non-H group.
      - **Energy curve:** schematic, order only (no numbers). It follows the textbook rule: eclipsed above staggered, and each eclipsed or gauche pair of carbon groups raises the energy. It is drawn only when every group on the two carbons is H or an sp³ carbon, since polar or sp² groups can change the order. OpenChemLib cannot hold a dihedral fixed while it relaxes the rest (a relaxed scan), and a rigid scan overstates butane's barriers by about 2×, so the curve does not use force-field energies. **Guess first** (off by default) hides the curve until the student turns to the form they think is least stable.
+     - **Steric (van der Waals) strain:** on bonds that get a curve, a see-through pink rod with a "vdW strain" label joins each pair of non-H groups sitting gauche or closer (Newman angle 65° or less), and the panel names them (gauche, eclipsed, or how far apart). Pairs with H are left out, following the textbook split: CH₃/CH₃ gauche is steric strain, H/CH₃ eclipsed is mostly torsional.
      - **Ring angles:** for each ring, the angles at its atoms measured on the model, compared with the ideal (109.5° sp³, 120° sp²), with a short note by ring size.
 4. **Viewer.** [3Dmol.js](https://3dmol.org).
 
@@ -26,7 +27,7 @@ Type a compound name and see the molecule in 3D, with buttons for the functional
 - `worker.js`: 3D build and group search (OpenChemLib)
 - `chem.js`: functional-group list and the chemistry helpers
 - `lookup.js`: name → structure (OPSIN, then PubChem with retry)
-- `test.mjs`: self-check (`npm install && npm test`): functional groups over ~50 molecules, hybridization, lone pairs, bond angles, kit counts, Newman bond lists and their order (cross-checked against the textbook strain increments), ring angles, hand-checked CIP priorities, and E/Z, ring cis/trans, R/S and mirror-image checks against [RDKit](https://www.rdkit.org) (a test-only dependency)
+- `test.mjs`: self-check (`npm install && npm test`): functional groups over ~50 molecules, hybridization, lone pairs, bond angles, kit counts, Newman bond lists, their order and steric pairs (cross-checked against the 3D model and the textbook strain increments), ring angles, hand-checked CIP priorities, and E/Z, ring cis/trans, R/S and mirror-image checks against [RDKit](https://www.rdkit.org) (a test-only dependency)
 
 ## Notes
 
