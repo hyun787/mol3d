@@ -1,4 +1,4 @@
-import { GROUPS, KIT_PARTS, IDEAL, conformer, stericPairs, diaxial, moreStable, huckel } from './chem.js';
+import { GROUPS, KIT_PARTS, IDEAL, conformer, stericPairs, diaxial, moreStable, huckel, CONE, sn2Rate } from './chem.js';
 import { resolveName } from './lookup.js';
 
 const $ = id => document.getElementById(id);
@@ -15,7 +15,9 @@ const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: 
   // plane: the meso mirror plane is shown (cur.mplane: undefined = not looked for yet, null = none on reachable shapes)
   plane: false,
   // guess first: rguess/rpick for the relation, fguess with fdl (D/L pick) or fpicks[row] (R/S picks) for the Fischer projection
-  rguess: false, rpick: null, fguess: false, fdl: null, fpicks: {} };
+  rguess: false, rpick: null, fguess: false, fdl: null, fpicks: {},
+  // Reactions tab: rp = principle (-1 none, 0 SN2, 1 SN1, 2 E2, 3 addition), rx = C–X row; xguess/xpicks: guess first, picks by result key
+  rp: -1, rx: 0, xguess: false, xpicks: {} };
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -55,6 +57,7 @@ function highlight() {
     const b = cur.bonds[state.bond], c = chairNow();
     return b ? [...b.atoms, ...b.front, ...b.back] : c ? [...c.atoms, ...c.subs.map(s => s.sub)] : cur.rings[state.ring]?.atoms;
   }
+  if (state.tab === 'reactions') return rxAtoms();
   return null;
 }
 
@@ -69,7 +72,8 @@ function draw() {
   const g = cur.groups[state.hl], hl = highlight();
   const set = hl ? new Set(hl) : null;
   const shown = a => state.h || a.elem !== 'H';
-  const lit = a => !set || set.has(a.index) || (state.side && a.model === 1); // the compared structure is never dimmed
+  // the compared structure and the Reactions tab's intermediates and products are never dimmed
+  const lit = a => !set || set.has(a.index) || (a.model > 0 && (state.side || state.tab === 'reactions'));
   viewer.setStyle({}, {});
   viewer.setStyle({ predicate: a => shown(a) && lit(a) }, styleFor(null));
   if (set) viewer.setStyle({ predicate: a => shown(a) && !lit(a) }, styleFor(tok('--dim')));
@@ -96,6 +100,7 @@ function draw() {
   showRel();
   showNewman();
   showChair();
+  showReact();
   addLabels();
   viewer.render();
 }
@@ -560,6 +565,7 @@ function addLabels() {
   drawStrain();
   drawStructure();
   drawPlane();
+  drawRx();
   const c = !state.sliding && chairNow(); // Shape tab: ax/eq beside each group (not H) on the selected chair
   if (c) for (const s of c.subs.filter(x => !x.h)) viewer.addLabel(s.ax ? 'ax' : 'eq', { position: atomAt(s.sub), alignment: 'bottomLeft',
     screenOffset: { x: 6, y: 6 }, fontSize: 12, bold: true, fontColor: tok('--bg'), backgroundColor: tok(s.ax ? '--accent' : '--fg'), backgroundOpacity: 1, inFront: true });
@@ -944,6 +950,194 @@ function leaveStereo() {
   if (state.mirror) setMirror(false); else if (state.side) setSide(false); else draw();
 }
 
+// ---- Reactions tab: one principle at a time (state.rp): 0 backside attack (SN2), 1 flat intermediate (SN1), 2 anti-periplanar
+// H and X (E2), 3 faces of a double bond. The worker builds intermediates and products on request (chem.js); cur.rxr keeps each
+// result by request (null = it could not be built). Models 1 and 2 (intermediate, products) sit to the right of the model.
+const P3 = (i, m = 0) => { const a = atomAt(i, m); return [a.x, a.y, a.z]; };
+const xyz3 = v => ({ x: v[0], y: v[1], z: v[2] });
+const DEG = ['methyl', '1°', '2°', '3°'];
+const degName = h => (h.deg || h.plain ? `${DEG[h.deg]} carbon` : 'carbon with no other carbon on it');
+const centerRS = a => cur.stereo.find(r => r.kind === 'center' && r.atom === a) || null;
+
+// The worker request for the current pick, its cache key, and its result (undefined = not asked yet).
+function rxReq() {
+  const h = cur.hal.rows[state.rx];
+  if (state.rp === 0 && h) return { kind: 'sn2', i: state.rx };
+  return null;
+}
+const rxKey = () => { const q = rxReq(); return q && JSON.stringify(q); };
+const rxRes = () => { const k = rxKey(); return k ? cur.rxr[k] : undefined; };
+
+// Atoms kept in color on the model.
+function rxAtoms() {
+  const h = cur.hal.rows[state.rx];
+  if (state.rp === 0 && h) return [h.c, h.x, ...h.cone];
+  return null;
+}
+
+let rxBusy = null; // cache key of the request the worker is on
+async function rxView() {
+  const k = state.tab === 'reactions' && rxKey(), mol = cur;
+  applyRx(true); // the view turns now; models come when the worker is done
+  if (!k || k in mol.rxr) return;
+  rxBusy = k; draw();
+  const res = await ask({ react: rxReq() });
+  if (res.stale || mol !== cur) return; // a newer request took over
+  rxBusy = null;
+  mol.rxr[k] = res.error ? null : res.react;
+  if (rxKey() === k) applyRx(false); else draw();
+}
+
+// Turn the view so model direction u points along screen direction t; returns the new rotation.
+const viewTurn = (u, t) => { const q0 = viewer.getView().slice(4, 8); return qMul(qArc(qRot(q0, u), t), q0); };
+
+// Put the model back as built, add the intermediate or products beside it, and turn the view for the pick.
+function applyRx(animate = true) {
+  if (state.tab !== 'reactions') return;
+  const r = rxRes(), h = cur.hal.rows[state.rx];
+  turn(null);
+  let models = [], q = null;
+  if (state.rp === 0 && h) {
+    const C = home3d[h.c], X = home3d[h.x];
+    q = viewTurn(unit(C.map((x, k) => x - X[k])), [-1, 0, 0]); // the back side to the left: the nucleophile comes in from there
+    if (r && sn2Rate(h) !== 'none') models = [r.product.molfile];
+  }
+  if (animate) rxQ = q; // the turn the models are placed for, kept while the view moves there
+  rxModels(models, rxQ);
+  draw();
+  rxFrame(rxQ);
+}
+let rxQ = null;
+
+// Move the view to rotation q (null: keep the rotation) with everything in view, as one smooth move. 3Dmol's animated
+// zoomTo adds steps to the view, so two at once (or one during our turn) overshoot; its instant zoomTo only finds the target.
+function rxFrame(q) {
+  const v0 = viewer.getView();
+  if (q) viewer.setView([...v0.slice(0, 4), ...q]);
+  viewer.zoomTo({});
+  const to = viewer.getView();
+  viewer.setView(v0);
+  animateView(to, 600);
+}
+
+// Models 1, 2 …: each molfile in a row to the right (screen right of rotation q, or of the view now), 2.5 Å apart.
+// Only shifted, so a product built onto the reactant keeps its turn.
+function rxModels(list, q) {
+  for (let m = viewer.getModel(); m && m.getID() > 0; m = viewer.getModel()) viewer.removeModel(m); // highest id first: 3Dmol then reuses the ids
+  if (!list.length) return;
+  const w = q || viewer.getView().slice(4, 8), r = qRot([-w[0], -w[1], -w[2], w[3]], [1, 0, 0]);
+  const along = p => p[0] * r[0] + p[1] * r[1] + p[2] * r[2];
+  let edge = Math.max(...viewer.getModel(0).selectedAtoms({}).map(a => along([a.x, a.y, a.z])));
+  for (const mf of list) {
+    const lines = mf.split('\n'), count = parseInt(lines[3].slice(0, 3));
+    const b = lines.slice(4, 4 + count).map(l => l.slice(0, 30).trim().split(/\s+/).map(Number)); // V2000 atom lines: x, y, z first
+    const s = edge + 2.5 - Math.min(...b.map(along));
+    for (let i = 0; i < count; i++) lines[4 + i] = b[i].map((x, k) => (x + s * r[k]).toFixed(4).padStart(10)).join('') + lines[4 + i].slice(30);
+    viewer.addModel(lines.join('\n'), 'sdf', { keepH: true });
+    edge = Math.max(...b.map(p => along(p) + s));
+  }
+}
+const rxShown = () => { const m = viewer.getModel(); return m ? m.getID() : 0; }; // how many models sit beside the model
+
+function leaveReactions() { rxModels([]); turn(null); draw(); }
+
+// Shapes and tags on the models. Only these shapes are removed here.
+let rxShapes = [];
+const rxTag = (text, at, color = '--accent', offset = { x: 10, y: 10 }) => viewer.addLabel(text, { position: xyz3(at), alignment: 'bottomLeft',
+  screenOffset: offset, fontSize: 15, bold: true, fontColor: tok('--bg'), backgroundColor: tok(color), backgroundOpacity: 1, inFront: true });
+function drawRx() {
+  rxShapes.forEach(s => viewer.removeShape(s));
+  rxShapes = [];
+  if (state.tab !== 'reactions' || !cur || state.sliding) return;
+  const h = cur.hal.rows[state.rx], r = rxRes();
+  if (state.rp === 0 && h) {
+    const C = P3(h.c), X = P3(h.x), d = unit(C.map((x, k) => x - X[k])), at = s => C.map((x, k) => x + s * d[k]);
+    rxShapes.push(viewer.addArrow({ start: xyz3(at(4.4)), end: xyz3(at(1.9)), radius: 0.08, radiusRatio: 2.4, mid: 0.72, color: tok('--accent'), opacity: 0.9 }));
+    rxTag('OH⁻', at(4.6), '--accent', { x: -14, y: 6 });
+    for (const a of h.cone) rxShapes.push(viewer.addSphere({ center: xyz3(P3(a)), radius: 0.5, color: tok('--cut'), opacity: 0.45 }));
+    const was = centerRS(h.c);
+    if (was) rxTag(was.rs, C);
+    if (rxShown() && r.product.rs && sn2Open()) rxTag(r.product.rs, P3(h.c, 1));
+  }
+}
+
+// Guess first: picks by request key; a result is open once picked (or when the mode is off).
+const xOpen = k => !state.xguess || !!state.xpicks[k];
+const sn2Open = () => xOpen(rxKey());
+const verdictLine = (pick, right, answer) => `<p class="facts">${pick === right ? 'Right' : 'Not quite'}: ${answer}.</p>`;
+
+const SN2_RATE = {
+  fast: h => `<b>${h.deg ? '1°' : 'Methyl'}: fast.</b> Little blocks the back side of the carbon.`,
+  slow: () => '<b>2°: slow.</b> Two carbon groups crowd the back side.',
+  none: h => (h.neo ? '<b>Practically no S<sub>N</sub>2.</b> The carbon is 1°, but its neighbor carries three carbons (neopentyl), and one of them sits right behind it.'
+    : '<b>3°: no S<sub>N</sub>2.</b> Three carbon groups block the back side.'),
+};
+const NO_CX = {
+  F: 'C–F: fluoride leaves poorly, so alkyl fluorides rarely react this way.',
+  OH: 'C–OH: OH⁻ leaves poorly. An acid first turns –OH into –OH₂⁺, which leaves as water.',
+  sp2: 'A halogen on a C=C or ring carbon (vinyl or aryl halide) does not do S<sub>N</sub>1 or S<sub>N</sub>2.',
+};
+
+function buildReact() {
+  const box = $('rx-rows');
+  box.textContent = '';
+  cur.hal.rows.forEach((h, i) => {
+    const row = document.createElement('button'), others = cur.atoms[h.c].nbrs.filter(k => k !== h.x);
+    const names = [...others.filter(k => cur.atoms[k].el !== 'H'), ...others.filter(k => cur.atoms[k].el === 'H')].map(plain);
+    row.innerHTML = `<span>${esc(`C–${h.el} on a ${degName(h)}`)}</span><span class="sub">${esc(`On the carbon: ${names.join(', ')}`)}</span>`;
+    row.dataset.i = String(i);
+    row.addEventListener('click', () => { state.rx = i; rxView(); });
+    box.appendChild(row);
+  });
+}
+
+function showReact() {
+  if (state.tab !== 'reactions') return;
+  document.querySelectorAll('#rprin button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.rp === state.rp)));
+  const cx = state.rp >= 0 && state.rp < 3, out = $('rx-out');
+  $('rx-pick').hidden = !cx || !cur.hal.rows.length;
+  $('rx-pick-label').textContent = 'C–X bond';
+  document.querySelectorAll('#rx-rows button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.rx)));
+  if (state.rp < 0) { out.innerHTML = '<p class="small">Pick a principle to see it on this molecule.</p>'; return; }
+  if (cx && !cur.hal.rows.length) {
+    out.innerHTML = '<p class="facts">No C–Cl, C–Br or C–I on an sp³ carbon in this molecule.</p>'
+      + cur.hal.why.map(w => `<p class="small">${NO_CX[w]}</p>`).join('');
+    return;
+  }
+  const h = cur.hal.rows[state.rx], r = rxRes(), busy = rxBusy === rxKey();
+  if (state.rp === 0) out.innerHTML = sn2HTML(h, r, busy);
+  out.querySelectorAll('[data-xpick]').forEach(b => b.addEventListener('click', () => { state.xpicks[rxKey()] = b.dataset.xpick; draw(); }));
+}
+
+function sn2HTML(h, r, busy) {
+  const rate = sn2Rate(h), n = h.cone.length, was = centerRS(h.c);
+  let s = `<p class="facts">${rate ? SN2_RATE[rate](h) : '<b>No verdict on the rate.</b> The textbook rule here covers carbons whose other groups are only C and H.'}</p>`
+    + `<p class="facts">${n ? `${n} atom${n === 1 ? '' : 's'} (pink) sit${n === 1 ? 's' : ''} behind the carbon in this model, in the path of the nucleophile.` : 'Nothing sits behind the carbon in this model: its groups point to the sides.'}</p>`
+    + `<p class="small">The nucleophile, here OH⁻, comes in from the back, 180° from the leaving ${h.el}; any nucleophile comes in the same way. As the C–O bond forms and the C–${h.el} bond breaks, the other three groups flip like an umbrella in the wind, so the configuration is inverted. Pink: atoms within ${CONE.deg}° of that line and ${CONE.r.toFixed(1)} Å of the carbon.</p>`;
+  if (rate === 'none') return s + '<p class="small">No product is shown, since S<sub>N</sub>2 does not happen here.</p>';
+  if (busy || r === undefined) return s + '<p class="small">Building the product…</p>';
+  if (!r) return s + '<p class="small">The product could not be built in 3D here.</p>';
+  const rs = r.product.rs, k = rxKey();
+  s += '<p class="facts">Product, on the right: the alcohol, its OH where the nucleophile came in.</p>';
+  if (!rs) return s + '<p class="small">This carbon is not a stereocenter in the product, so the inversion leaves no R/S to compare.</p>';
+  if (!sn2Open()) return s + '<p class="facts">Is the product R or S at this carbon?</p><div class="row"><button data-xpick="R">R</button><button data-xpick="S">S</button></div>';
+  return s + (state.xguess ? verdictLine(state.xpicks[k], rs, `it is <b>${rs}</b>`) : '')
+    + `<p class="facts">${was ? `The carbon was <b>${was.rs}</b> and is <b>${rs}</b> in the product.` : `The carbon is <b>${rs}</b> in the product.`}</p>`
+    + (was ? '<p class="small">Inversion turns the arrangement inside out. The R/S letter comes from the priorities, so it can stay the same when OH ranks in a different place than the leaving group did.</p>' : '')
+    + (was && !was.given ? '<p class="small">The name does not set this carbon’s configuration, so the 3D build picked one.</p>' : '');
+}
+
+document.querySelectorAll('#rprin button').forEach(b => b.addEventListener('click', () => {
+  const i = +b.dataset.rp;
+  state.rp = state.rp === i ? -1 : i;
+  rxView();
+}));
+$('btn-xguess').addEventListener('click', e => {
+  state.xguess = !state.xguess; state.xpicks = {};
+  e.currentTarget.setAttribute('aria-pressed', String(state.xguess));
+  draw();
+});
+
 function showTab() {
   document.querySelectorAll('[data-tab]').forEach(t => {
     const on = t.dataset.tab === state.tab;
@@ -989,7 +1183,8 @@ async function run(name) {
     if (res.error) return showEmpty(`<span class="err">${esc(res.error)}</span>`);
 
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
-    cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })), flips: {} }; // flips[i]: the other chair of chair i, null if none
+    cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })), flips: {}, rxr: {} }; // flips[i]: the other chair of chair i, null if none
+    state.rx = 0; state.xpicks = {}; rxBusy = null; rxQ = null;
     state.hl = state.atom = state.st = state.bond = state.ring = state.chair = -1; state.tries = {}; state.stries = {}; state.ctries = {}; state.flipped = state.sliding = false;
     state.ar = -1; state.ppick = state.npick = null;
     state.plane = false; planeBusy = false; state.rpick = state.fdl = null; state.fpicks = {};
@@ -1017,8 +1212,9 @@ async function run(name) {
     $('f-note').textContent = '3D model built in your browser (OpenChemLib, MMFF94s+). It shows one low-energy shape; real molecules move between many.'
       + (res.stripped ? ' This is a salt or mixture, so only the largest part is shown.' : '')
       + (res.minimized ? '' : ' The force field does not cover every atom here, so bond lengths are approximate.');
-    buildChips(); buildKit(); buildStereo(); buildShape(); buildArom();
+    buildChips(); buildKit(); buildStereo(); buildShape(); buildArom(); buildReact();
     viewer.resize(); viewer.zoomTo(); draw(); home = viewer.getView(); // resize: the stage may have changed size since the viewer was made
+    if (state.tab === 'reactions') rxView();
   } catch (e) {
     showEmpty(`<span class="err">${esc(e.message || 'The lookup failed. Check the connection and try again.')}</span>`);
   } finally {
@@ -1043,8 +1239,11 @@ const tabs = [...document.querySelectorAll('[data-tab]')];
 tabs.forEach((t, i) => {
   t.addEventListener('click', () => {
     const left = state.tab; state.tab = t.dataset.tab; showTab();
+    if (!cur) return;
     if (left === 'shape' && state.tab !== 'shape' && (state.bond >= 0 || state.flipped)) setBond(-1, true); // a turned model or the other chair is a Shape-tab view
-    else if (left === 'stereo' && state.tab !== 'stereo') leaveStereo(); else draw();
+    else if (left === 'stereo' && state.tab !== 'stereo') leaveStereo();
+    else if (left === 'reactions' && state.tab !== 'reactions') leaveReactions(); else draw();
+    if (state.tab === 'reactions' && left !== 'reactions') rxView();
   });
   t.addEventListener('keydown', e => { // arrow keys move between tabs, as in any tab list
     const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
@@ -1078,7 +1277,8 @@ $('btn-cguess').addEventListener('click', e => {
 $('btn-reset').addEventListener('click', () => {
   if (!home) return;
   anim++; viewer.setView(home);
-  if (state.mirror) setMirror(true); else if (state.side) setSide(true); else viewer.render();
+  if (state.mirror) setMirror(true); else if (state.side) setSide(true);
+  else if (state.tab === 'reactions' && rxShown()) { rxQ = null; applyRx(false); } else viewer.render();
 });
 $('btn-mirror').addEventListener('click', () => setMirror(!state.mirror));
 $('btn-pol').addEventListener('click', () => setView('pol', !state.pol));

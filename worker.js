@@ -1,13 +1,18 @@
 // Runs the slow chemistry (3D build, group search, ring flips) off the main thread so the page stays responsive.
 import OCL from 'https://cdn.jsdelivr.net/npm/openchemlib@9.25.1/dist/openchemlib.js';
-import { build3D, findGroups, atomInfo, kitParts, stereo, superimposable, relation, isMeso, mirrorPlane, cipCenters, fischer, newmanBonds, ringAngles, chairs, flipChair, polarity, aromaticRings, equivalentH } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, superimposable, relation, isMeso, mirrorPlane, cipCenters, fischer, newmanBonds, ringAngles, chairs, flipChair, polarity, aromaticRings, equivalentH, halides, sn2 } from './chem.js';
 
 const ready = OCL.Resources.registerFromUrl('https://cdn.jsdelivr.net/npm/openchemlib@9.25.1/dist/resources.json');
 let last = null; // the last molecule built: a ring flip ({flip: chair index}) and a comparison ({compare: SMILES}) work on it
 
-onmessage = async ({ data: { id, smiles, flip, compare, plane } }) => {
+onmessage = async ({ data: { id, smiles, flip, compare, plane, react } }) => {
   try {
     await ready;
+    if (react) { // Reactions tab, on request: { kind: 'sn2', i: C–X row }
+      const h = last.hal.rows[react.i];
+      postMessage({ id, react: sn2(OCL, last.mol, h.c, h.x) });
+      return;
+    }
     if (flip !== undefined) { // only on request: the conformer search takes a second or more
       const f = flipChair(OCL, last.mol, last.chairs[flip].atoms);
       // toMolfile() writes y and z negated (a 180° turn about x), so turn the flipped chair the same way for the viewer
@@ -26,7 +31,7 @@ onmessage = async ({ data: { id, smiles, flip, compare, plane } }) => {
     }
     const { mol, stripped, minimized, given } = build3D(OCL, smiles);
     const atoms = atomInfo(mol);
-    last = { mol, given, chairs: chairs(mol, atoms) };
+    last = { mol, given, chairs: chairs(mol, atoms), hal: halides(OCL, mol, atoms) };
     const pol = polarity(mol), st = stereo(OCL, mol, given);
     let charge = 0;
     for (let i = 0; i < mol.getAllAtoms(); i++) charge += mol.getAtomCharge(i);
@@ -47,6 +52,7 @@ onmessage = async ({ data: { id, smiles, flip, compare, plane } }) => {
       pol: { ...pol, net: [pol.net[0], -pol.net[1], -pol.net[2]] }, // into the molfile's frame, as for flips
       arom: aromaticRings(mol),
       nmr: equivalentH(mol),
+      hal: last.hal,
     });
   } catch (e) {
     postMessage({ id, error: e?.message || String(e) });

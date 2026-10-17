@@ -50,11 +50,16 @@ export const GROUPS = [
 // Salts: only the largest fragment is kept.
 // `given` = stereo parities from the SMILES itself (3 = left open), keyed by heavy-atom index, which the
 // 3D molecule keeps (it only appends H). The 3D model always picks one isomer, so this tells which picks were set.
+// The input can also be a molecule edited from a 3D model (Reactions tab): its stereo is read from those coordinates.
+// `converged` = MMFF94s+ minimise() returned 0.
 export function build3D(OCL, smiles) {
-  // getFragments, not stripSmallFragments: the latter neutralizes charges (acetate would become acetic acid)
-  const frags = OCL.Molecule.fromSmiles(smiles).getFragments();
-  const mol = frags.reduce((a, b) => (b.getAtoms() > a.getAtoms() ? b : a));
-  const stripped = frags.length > 1;
+  let mol = smiles, stripped = false;
+  if (typeof smiles === 'string') {
+    // getFragments, not stripSmallFragments: the latter neutralizes charges (acetate would become acetic acid)
+    const frags = OCL.Molecule.fromSmiles(smiles).getFragments();
+    mol = frags.reduce((a, b) => (b.getAtoms() > a.getAtoms() ? b : a));
+    stripped = frags.length > 1;
+  }
   mol.ensureHelperArrays(OCL.Molecule.cHelperParities);
   const given = { atoms: [], bonds: {} };
   for (let a = 0; a < mol.getAtoms(); a++) given.atoms.push(mol.getAtomParity(a));
@@ -77,10 +82,10 @@ export function build3D(OCL, smiles) {
     if (m && (m3 ??= m) && keeps(m)) { m3 = m; break; }
   }
   if (!m3) throw new Error('Could not build a 3D model for this structure.');
-  let minimized = true;
-  try { new OCL.ForceFieldMMFF94(m3, 'MMFF94s+').minimise(); }
+  let minimized = true, converged = false;
+  try { converged = new OCL.ForceFieldMMFF94(m3, 'MMFF94s+').minimise() === 0; }
   catch { minimized = false; } // atom types MMFF does not cover (e.g. metals): keep the raw conformer
-  return { mol: m3, stripped, minimized, given };
+  return { mol: m3, stripped, minimized, converged, given };
 }
 
 const pairKey = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
@@ -484,7 +489,8 @@ function turnToPlane(mol, P, part, s, t) {
 }
 
 // Rigid move of positions P onto Q (least squares over all atoms; Horn's quaternion method, power iteration).
-function fitOnto(P, Q) {
+// `all`: other positions to move by the same turn and shift (default: P itself).
+function fitOnto(P, Q, all = P) {
   const mean = X => [0, 1, 2].map(k => X.reduce((t, p) => t + p[k], 0) / X.length), cp = mean(P), cq = mean(Q);
   const S = [0, 1, 2].map(i => [0, 1, 2].map(j => P.reduce((t, p, a) => t + (p[i] - cp[i]) * (Q[a][j] - cq[j]), 0)));
   const [[xx, xy, xz], [yx, yy, yz], [zx, zy, zz]] = S;
@@ -494,7 +500,7 @@ function fitOnto(P, Q) {
   let q = [1, 0.1, 0.1, 0.1];
   for (let it = 0; it < 500; it++) q = unit(N.map((row, i) => row.reduce((t, v, j) => t + v * q[j], 0) + shift * q[i]));
   const [w, ...u] = q;
-  return P.map(p => { const v = sub(p, cp), c1 = cross(u, v), c2 = cross(u, c1); return v.map((x, k) => x + 2 * w * c1[k] + 2 * c2[k] + cq[k]); });
+  return all.map(p => { const v = sub(p, cp), c1 = cross(u, v), c2 = cross(u, c1); return v.map((x, k) => x + 2 * w * c1[k] + 2 * c2[k] + cq[k]); });
 }
 
 // The mirror plane of a meso compound, checked on real coordinates: each atom, reflected through the plane, lands within
@@ -1077,4 +1083,108 @@ export function equivalentH(mol) {
   }
   const seen = [];
   return { h, cls: keys.map(k => (seen.includes(k) ? seen : (seen.push(k), seen)).indexOf(k)) };
+}
+
+// ---- Reactions tab: the 3D conditions of SN2, SN1/E1, E2 and addition to a C=C ----
+// Products are made from the reactant's own 3D model: an atom is changed, removed or added where the mechanism puts it
+// (OH⁻'s O behind the carbon for SN2, water's O on one face of the flat carbocation, the H and X taken off an anti shape
+// for E2, two atoms on one or both faces of a C=C). OCL reads the new compound's stereo from those coordinates (getIDCode
+// reads 3D), and build3D builds it fresh: it keeps the heavy-atom order and appends H, so a product's heavy atom i is the
+// edited model's heavy atom i, with added heavy atoms after the old ones.
+const LEAVING = { 17: 'Cl', 35: 'Br', 53: 'I' };
+const heavyNbrs = (mol, a) => nbrs(mol, a).filter(x => mol.getAtomicNo(x) !== 1);
+const hOn = (mol, a) => nbrs(mol, a).filter(x => mol.getAtomicNo(x) === 1);
+
+// Equivalent atoms (same compound, or mirror images, when marked with an isotope): one key per atom.
+function atomKey(mol, a) {
+  const m = mol.getCompactCopy(), z = mol.getAtomicNo(a);
+  m.setAtomMass(a, (MASS_NO[z] || 2 * z) + 1);
+  const id = m.getIDCode();
+  for (let i = 0; i < m.getAllAtoms(); i++) m.setAtomX(i, -m.getAtomX(i));
+  return [id, m.getIDCode()].sort().join(' ');
+}
+
+// Build the edited model fresh. Dropped (null) when the build does not keep the stereo OCL read from the edit.
+function rebuild(OCL, edited) {
+  edited.ensureHelperArrays(OCL.Molecule.cHelperParities);
+  const id = edited.getIDCode(), b = build3D(OCL, edited);
+  return b.mol.getIDCode() === id ? b : null;
+}
+
+// Move molecule m rigidly so its atoms `from` sit on positions Q (least squares), in place.
+function placeOn(m, from, Q) {
+  const all = Array.from({ length: m.getAllAtoms() }, (_, a) => pos(m, a));
+  fitOnto(from.map(a => all[a]), Q, all).forEach(([x, y, z], a) => { m.setAtomX(a, x); m.setAtomY(a, y); m.setAtomZ(a, z); });
+}
+
+// R/S of the CIP stereocenters among `want` atoms of a built molecule: { atom: 'R' | 'S' }.
+function rsAt(OCL, b, want) {
+  const out = {};
+  for (const r of stereo(OCL, b.mol, b.given)) if (r.kind === 'center' && want.includes(r.atom)) out[r.atom] = r.rs;
+  return out;
+}
+
+// What the page posts for a built product: its molfile (the viewer's frame) and isomeric SMILES.
+const productOut = (b, extra) => ({ molfile: b.mol.toMolfile(), smiles: b.mol.toIsomericSmiles(), ...extra });
+
+// Each C–Cl, C–Br and C–I on an sp³ carbon, one per set of equivalent ones. deg = carbons on that carbon (0 = methyl);
+// plain = its other groups are all C or H, which is what the textbook rules below cover; neo = 1° next to a quaternary
+// carbon (neopentyl); allylic / benzylic = next to a C=C carbon or an aromatic ring carbon. `cone` = atoms behind the
+// carbon (see backside). When there is none, `why` lists what the molecule has instead: 'F' (C–F), 'OH' (alcohol),
+// 'sp2' (a halogen on a C=C or ring carbon).
+export function halides(OCL, mol, atoms) {
+  mol.ensureHelperArrays(OCL.Molecule.cHelperRings);
+  const out = [], seen = new Set(), why = new Set(), z = a => mol.getAtomicNo(a);
+  for (let x = 0; x < mol.getAtoms(); x++) {
+    const c = nbrs(mol, x)[0];
+    if (![9, 17, 35, 53].includes(z(x)) || nbrs(mol, x).length !== 1 || z(c) !== 6) continue;
+    if (atoms[c].hyb !== 'sp3' || nbrs(mol, c).length !== 4) { why.add('sp2'); continue; }
+    if (z(x) === 9) { why.add('F'); continue; }
+    const key = atomKey(mol, x);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const others = nbrs(mol, c).filter(k => k !== x), carbons = others.filter(k => z(k) === 6);
+    const pi = k => nbrs(mol, k).some(j => z(j) === 6 && mol.getBondOrder(mol.getBond(k, j)) === 2);
+    out.push({ c, x, el: LEAVING[z(x)], deg: carbons.length, plain: others.every(k => [1, 6].includes(z(k))),
+      neo: carbons.length === 1 && heavyNbrs(mol, carbons[0]).filter(k => z(k) === 6).length === 4,
+      allylic: carbons.some(k => !mol.isAromaticAtom(k) && pi(k)), benzylic: carbons.some(k => mol.isAromaticAtom(k)),
+      cone: backside(mol, c, x) });
+  }
+  for (let a = 0; a < mol.getAtoms(); a++)
+    if (z(a) === 8 && hOn(mol, a).length === 1 && nbrs(mol, a).some(k => z(k) === 6 && atoms[k].hyb === 'sp3')) why.add('OH');
+  return { rows: out, why: [...why] };
+}
+
+// SN2: the atoms in the nucleophile's path, behind the carbon: within 60° of the line from X through C and 3.0 Å of C.
+// The groups on the carbon itself sit at about 71° (109.5° from X), so they are outside; what counts is what they hold
+// up behind it, in this model's conformation (bromoethane 1 H, 2-bromopropane 2, 2-bromo-2-methylpropane 3).
+export const CONE = { deg: 60, r: 3.0 };
+export function backside(mol, c, x) {
+  const d = unit(sub(pos(mol, c), pos(mol, x))), out = [];
+  for (let a = 0; a < mol.getAllAtoms(); a++) {
+    if (a === c || a === x) continue;
+    const v = sub(pos(mol, a), pos(mol, c)), r = Math.hypot(...v);
+    if (r <= CONE.r && angle(v, d) <= CONE.deg) out.push(a);
+  }
+  return out;
+}
+
+// Textbook SN2 rule: methyl and 1° fast, 2° slow, 3° none, and a 1° carbon next to a quaternary one (neopentyl) practically
+// none. Only for carbons whose other groups are C or H (null otherwise).
+export const sn2Rate = h => (!h.plain ? null : h.deg === 3 || h.neo ? 'none' : h.deg === 2 ? 'slow' : 'fast');
+
+// SN2 with OH⁻: the X becomes an O placed on the back side, 1.43 Å from C along the X → C line. The three other groups
+// stay, so the O sits on their side: inverted. The product is moved onto the inverted reactant (O on the back side, each
+// group's first atom reflected through the plane at C across the C–X line: the umbrella turned inside out).
+// Returns { product: { molfile, smiles, rs } } (rs = R/S at C in the product, or null) or null.
+export function sn2(OCL, mol, c, x) {
+  const C = pos(mol, c), d = unit(sub(C, pos(mol, x))), O = C.map((v, k) => v + 1.43 * d[k]);
+  const e = mol.getCompactCopy();
+  e.setAtomicNo(x, 8);
+  e.setAtomX(x, O[0]); e.setAtomY(x, O[1]); e.setAtomZ(x, O[2]);
+  const b = rebuild(OCL, e);
+  if (!b) return null;
+  const subs = nbrs(mol, c).filter(k => k !== x), flip = p => { const t = 2 * dot(sub(p, C), d); return p.map((v, k) => v - t * d[k]); };
+  placeOn(b.mol, [c, x, ...subs], [C, O, ...subs.map(k => flip(pos(mol, k)))]);
+  return { product: productOut(b, { rs: rsAt(OCL, b, [c])[c] ?? null }) };
 }
