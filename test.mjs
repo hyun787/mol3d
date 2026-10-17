@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, newmanBonds, conformer, ringAngles, stericPairs } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair } from './chem.js';
 import { resolveName } from './lookup.js';
 
 OCL.Resources.registerFromNodejs();
@@ -419,8 +419,63 @@ for (const [name, smi, size, lo, hi, ideal] of RINGS) {
 const decalin = ringAngles(build3D(OCL, 'C1CCC2CCCCC2C1').mol, atomInfo(build3D(OCL, 'C1CCC2CCCCC2C1').mol));
 if (decalin.length !== 2 || decalin.some(r => r.size !== 6)) { fail++; console.log('FAIL decalin rings', decalin.map(r => r.size)); }
 
+// ---- Chairs: [name, SMILES, flip block of each chair found ('-' = can flip), every non-H group equatorial?]
+const GLUCOSE = 'C([C@@H]1[C@H]([C@@H]([C@H]([C@@H](O1)O)O)O)O)O', MENTHOL = 'C[C@@H]1CC[C@H]([C@@H](C1)O)C(C)C';
+const CHAIRS = [
+  ['cyclohexane', 'C1CCCCC1', 'h'], ['piperidine', 'C1CCNCC1', 'h'], ['tetrahydropyran', 'C1CCOCC1', 'h'], ['1,4-dioxane', 'C1COCCO1', 'h'],
+  ['methylcyclohexane', 'CC1CCCCC1', '-'], ['N-methylpiperidine', 'CN1CCCCC1', '-'],
+  ['cyclohexanone', 'O=C1CCCCC1', ''], ['cyclohexene', 'C1CCC=CC1', ''], ['benzene', 'c1ccccc1', ''], ['cyclopentane', 'C1CCCC1', ''],
+  ['cycloheptane', 'C1CCCCCC1', ''], ['norbornane (boat)', 'C1CC2CCC1C2', ''], ['bicyclo[2.2.2]octane (boats)', 'C1CC2CCC1CC2', ''],
+  ['trans-decalin', 'C1CC[C@H]2CCCC[C@@H]2C1', 'trans trans'], ['cis-decalin', 'C1CC[C@H]2CCCC[C@H]2C1', 'cis'],
+  ['adamantane', 'C1C2CC3CC1CC(C2)C3', 'bridged bridged bridged bridged'], ['spiro[5.5]undecane', 'C1CCC2(CC1)CCCCC2', '- -'],
+  ['beta-D-glucose (all equatorial)', GLUCOSE, '-', true], ['(1R,2S,5R)-menthol (all equatorial)', MENTHOL, '-', true],
+];
+// Geometry every chair must have: each ring atom with two outside atoms has one axial and one equatorial, on opposite
+// faces; axial bonds alternate up and down around the ring.
+const chairOk = c => c.atoms.every((a, i) => {
+  const s = c.subs.filter(x => x.atom === a), nx = c.subs.find(x => x.atom === c.atoms[(i + 1) % 6] && x.ax), ax = s.find(x => x.ax);
+  return (s.length !== 2 || (s.filter(x => x.ax).length === 1 && s[0].up !== s[1].up)) && (!ax || !nx || ax.up !== nx.up);
+});
+for (const [name, smi, want, allEq] of CHAIRS) {
+  const { mol } = build3D(OCL, smi), ch = chairs(mol, atomInfo(mol));
+  const got = ch.map(c => c.block || '-').join(' ');
+  const ok = got === want && ch.every(chairOk) && (!allEq || ch.every(c => c.subs.every(s => s.h || !s.ax)));
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'chair', name.padEnd(34), got || '(none)', ok ? '' : `(want ${want || 'none'}${allEq ? ', all equatorial' : ''}${ch.every(chairOk) ? '' : ', bad axial/equatorial geometry'})`);
+}
+
+// Axial/equatorial against the textbook table, using the ring cis/trans that stereo() reads (checked against RDKit above):
+// cis-1,2, trans-1,3 and cis-1,4 put one group axial and one equatorial; the others put both on the same kind.
+// Also cis = the two groups on one face.
+const DIMETHYL = [
+  ['cis-1,2', 'C[C@H]1CCCC[C@H]1C', 'cis', 'ae'], ['trans-1,2', 'C[C@H]1CCCC[C@@H]1C', 'trans', 'same'],
+  ['cis-1,3', 'C[C@@H]1CCC[C@H](C)C1', 'cis', 'same'], ['trans-1,3', 'C[C@@H]1CCC[C@@H](C)C1', 'trans', 'ae'],
+  ['cis-1,4', 'C[C@H]1CC[C@@H](C)CC1', 'cis', 'ae'], ['trans-1,4', 'C[C@H]1CC[C@H](C)CC1', 'trans', 'same'],
+];
+const axeq = subs => { const g = subs.filter(s => !s.h); return { kind: g[0].ax === g[1].ax ? 'same' : 'ae', face: g[0].up === g[1].up ? 'cis' : 'trans', g }; };
+for (const [name, smi, ct, want] of DIMETHYL) {
+  const { mol, given } = build3D(OCL, smi), [c] = chairs(mol, atomInfo(mol)), ringCT = stereo(OCL, mol, given).find(r => r.kind === 'ring')?.ct;
+  const got = axeq(c.subs), ok = ringCT === ct && got.kind === want && got.face === ct && chairOk(c) && !c.block && !c.judge;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'ax/eq', `${name}-dimethyl`.padEnd(20), got.g.map(s => (s.ax ? 'axial' : 'equatorial')).join(', '), ok ? '' : `(want ${ct}: ${want}; stereo says ${ringCT}, faces ${got.face})`);
+}
+
+// 1,3-diaxial pairs, checked against distance: for an axial group X, the partner on each ring atom two away must be that
+// atom's outside atom nearest to X. [SMILES, pairs expected when X is axial in the model]
+const dist = (m, a, b) => Math.hypot(m.getAtomX(a) - m.getAtomX(b), m.getAtomY(a) - m.getAtomY(b), m.getAtomZ(a) - m.getAtomZ(b));
+for (const [smi, want] of [['CC1CCCCC1', 2], ['OC1CCCCC1', 2], ['C[C@@H]1CCC[C@H](C)C1', 3], ['CC1(C)CCCCC1', 2], ['C1CCCCC1', 0], [MENTHOL, 0]]) {
+  const { mol } = build3D(OCL, smi), [c] = chairs(mol, atomInfo(mol)), pairs = diaxial(c);
+  const axial = c.subs.filter(s => s.ax && !s.h), n = axial.length ? want : 0;
+  const near = axial.every(s => { const i = c.atoms.indexOf(s.atom);
+    return [2, 4].every(d => { const r = c.atoms[(i + d) % 6], o = c.subs.filter(x => x.atom === r).sort((p, q) => dist(mol, p.sub, s.sub) - dist(mol, q.sub, s.sub))[0];
+      return pairs.some(([x, y]) => (x === s.sub && y === o.sub) || (y === s.sub && x === o.sub)); }); });
+  const ok = pairs.length === n && near;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', '1,3-diaxial', smi.padEnd(30), axial.length ? `${axial.length} axial group(s), ${pairs.length} pairs` : 'no axial group', ok ? '' : `(want ${n} pairs, nearest-atom check ${near})`);
+}
+
 // The worker posts these to the page, so they must survive structured cloning (OCL's own arrays do not).
-try { const m = build3D(OCL, 'CC1CCC2CCCCC2C1').mol, at = atomInfo(m); structuredClone({ b: newmanBonds(OCL, m, at), r: ringAngles(m, at) }); }
+try { const m = build3D(OCL, 'CC1CCC2CCCCC2C1').mol, at = atomInfo(m); structuredClone({ b: newmanBonds(OCL, m, at), r: ringAngles(m, at), c: chairs(m, at) }); }
 catch (e) { fail++; console.log('FAIL Shape data cannot be posted from the worker:', e.message); }
 
 // Name lookup: OPSIN rejects, PubChem is busy (503), then unreachable, then answers.

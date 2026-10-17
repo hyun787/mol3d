@@ -239,10 +239,7 @@ export function stereo(OCL, mol, given) {
   // shortcut: OCL's ring set stops at 7-membered rings; extend if larger rings come up in class.
   const seen = new Set(), rs = mol.getRingSet();
   for (let r = 0; r < rs.getSize(); r++) {
-    const ring = rs.getRingAtoms(r), inRing = new Set(ring);
-    const c = ring.map(a => pos(mol, a)).reduce((s, p) => s.map((v, i) => v + p[i] / ring.length), [0, 0, 0]);
-    let normal = [0, 0, 0]; // Newell-style: sum of cross products around the ring (atoms come in ring order)
-    ring.forEach((a, i) => { normal = normal.map((v, k) => v + cross(sub(pos(mol, a), c), sub(pos(mol, ring[(i + 1) % ring.length]), c))[k]); });
+    const ring = Array.from(rs.getRingAtoms(r)), inRing = new Set(ring), normal = ringFrame(mol, ring).n;
     const subs = [];
     for (const a of ring) {
       const exo = nbrs(mol, a).filter(x => !inRing.has(x));
@@ -450,6 +447,159 @@ export function ringAngles(mol, atoms) {
       ideal: hyb.every(Boolean) ? mean(hyb.map(h => IDEAL[h])) : null });
   }
   return out;
+}
+
+// ---- Shape tab: chairs (six-membered rings of sp³ atoms), axial/equatorial, ring flip ----
+// Ring frame: center and unit normal (Newell: sum of cross products around the ring; atoms come in ring order).
+function ringFrame(mol, ring) {
+  const c = ring.map(a => pos(mol, a)).reduce((s, p) => s.map((v, i) => v + p[i] / ring.length), [0, 0, 0]);
+  let n = [0, 0, 0];
+  ring.forEach((a, i) => { n = n.map((v, k) => v + cross(sub(pos(mol, a), c), sub(pos(mol, ring[(i + 1) % ring.length]), c))[k]); });
+  return { c, n: unit(n) };
+}
+
+// Signed dihedral a–b–c–d in degrees (−180 to 180).
+function torsion(mol, a, b, c, d) {
+  const [pa, pb, pc, pd] = [a, b, c, d].map(x => pos(mol, x)), b2 = sub(pc, pb);
+  const n1 = cross(sub(pb, pa), b2), n2 = cross(b2, sub(pd, pc));
+  return Math.atan2(dot(cross(n1, unit(b2)), n2), dot(n1, n2)) * 180 / Math.PI;
+}
+
+// A chair: the six ring torsions alternate in sign and each is at least 30° (ideal ±55°). A boat has two torsions
+// near 0°, a twist-boat two neighbors of the same sign, a half-chair one near 0°.
+export function isChair(mol, ring) {
+  const t = ring.map((a, i) => torsion(mol, a, ring[(i + 1) % 6], ring[(i + 2) % 6], ring[(i + 3) % 6]));
+  return t.every((x, i) => Math.abs(x) >= 30 && Math.sign(x) !== Math.sign(t[(i + 1) % 6]));
+}
+
+// Every bond from a ring atom to an atom outside the ring: axial when it runs within about 50° of the ring normal
+// (ideal chair: axial 0°, equatorial about 70°), and which face it points to (up = along the normal).
+export function chairSubs(mol, ring) {
+  const { n } = ringFrame(mol, ring), inRing = new Set(ring);
+  return ring.flatMap(a => nbrs(mol, a).filter(s => !inRing.has(s)).map(s => {
+    const k = dot(unit(sub(pos(mol, s), pos(mol, a))), n);
+    return { atom: a, sub: s, ax: Math.abs(k) > 0.65, up: k > 0, h: mol.getAtomicNo(s) === 1 };
+  }));
+}
+
+// Why a chair is not flipped here (null = it can be): 'h' only H on the ring, so both chairs are the same;
+// 'bridged'; 'trans' fused with the other ring on two equatorial bonds (locked, like trans-decalin); 'cis' fused
+// with one axial bond (it can flip, but the other ring flips with it).
+// shortcut: cis-fused rings (cis-decalin) are not flipped; fusion with a ring above 7 atoms (outside OCL's ring set)
+// goes unseen, so the conformer search just finds no flipped chair there.
+function flipBlock(mol, ring, subs) {
+  if (subs.every(s => s.h)) return 'h';
+  const rs = mol.getRingSet(), fused = [];
+  for (let r = 0; r < rs.getSize(); r++) {
+    const other = Array.from(rs.getRingAtoms(r)), shared = ring.filter(a => other.includes(a));
+    if (shared.length === 6 || shared.length < 2) continue; // itself, or spiro: a spiro ring flips on its own
+    const [p, q] = shared, i = ring.indexOf(p), j = ring.indexOf(q);
+    if (shared.length > 2 || (Math.abs(i - j) !== 1 && Math.abs(i - j) !== 5)) return 'bridged';
+    fused.push(subs.filter(s => (s.atom === p || s.atom === q) && other.includes(s.sub)).every(s => !s.ax));
+  }
+  return !fused.length ? null : fused.every(Boolean) ? 'trans' : 'cis';
+}
+
+// Which chair is more stable comes from MMFF94s+, so it is only told for groups whose axial/equatorial energy was
+// checked against measured A-values in test.mjs. Alkyl (sp³ C with only C and H on it), OH and NH₂ come out on the
+// measured side. F, Cl, Br and C≡N come out on the wrong side (axial lower); I comes out right, but as one family
+// the halogens are left out. Returns null (a verdict can be given), {why: 'wrong', name}, or {why: 'unchecked'}.
+function noVerdict(mol, subs) {
+  for (const { atom, sub: s } of subs.filter(x => !x.h)) {
+    const z = mol.getAtomicNo(s), nb = nbrs(mol, s), h = nb.filter(x => mol.getAtomicNo(x) === 1).length;
+    if ([9, 17, 35, 53].includes(z)) return { why: 'wrong', name: mol.getAtomLabel(s) };
+    if (z === 6 && nb.length === 2 && piBonds(mol, s) === 2 && nb.some(x => mol.getAtomicNo(x) === 7)) return { why: 'wrong', name: 'C≡N' };
+    const ok = (z === 6 && nb.length === 4 && nb.every(x => x === atom || [1, 6].includes(mol.getAtomicNo(x))))
+      || (z === 8 && nb.length === 2 && h === 1) || (z === 7 && nb.length === 3 && h === 2);
+    if (!ok) return { why: 'unchecked' };
+  }
+  return null;
+}
+
+// Chairs in the 3D model: six-membered rings (OCL's ring set) whose atoms are all sp³ and whose shape is a chair.
+export function chairs(mol, atoms) {
+  const rs = mol.getRingSet(), out = [];
+  for (let r = 0; r < rs.getSize(); r++) {
+    const ring = Array.from(rs.getRingAtoms(r));
+    if (ring.length !== 6 || ring.some(a => atoms[a].hyb !== 'sp3') || !isChair(mol, ring)) continue;
+    const subs = chairSubs(mol, ring);
+    out.push({ atoms: ring, subs, block: flipBlock(mol, ring, subs), judge: noVerdict(mol, subs) });
+  }
+  return out;
+}
+
+// 1,3-diaxial pairs in a chair: each axial group other than H, with every axial atom two ring atoms away on the same
+// face (the axial bonds of ring atoms 1, 3 and 5 all point to one face). Returns [group, partner] pairs, each once.
+export function diaxial(chair) {
+  const ring = chair.atoms, ax = chair.subs.filter(s => s.ax), out = [], seen = new Set();
+  for (const s of ax.filter(x => !x.h)) {
+    const i = ring.indexOf(s.atom);
+    for (const t of ax.filter(x => x.up === s.up && [2, 4].includes((ring.indexOf(x.atom) - i + 6) % 6))) {
+      const key = pairKey(s.sub, t.sub);
+      if (!seen.has(key)) { seen.add(key); out.push([s.sub, t.sub]); }
+    }
+  }
+  return out;
+}
+
+// The other chair of ring `ring`, from real conformers: OCL's conformer generator (a fresh start per seed) gives
+// shapes that MMFF94s+ then relaxes fully; a run only counts when minimise() converged (returns 0). A conformer
+// whose ring is a chair with every non-H group's axial/equatorial swapped is the flipped chair; with none swapped,
+// the same chair. E = the lowest energy found for each chair (kJ/mol), the model included. `xyz` = the lowest flipped
+// conformer whose groups keep their faces (a true flip, not its mirror image), turned to sit on the model's ring.
+// Returns null when no flipped chair turns up.
+// One conformer per seed (getOneConformerAsMolecule, about 30 ms; initializeConformers costs about 600 ms a seed).
+// The ring shape comes from the generator's ring-fragment step, which changes with the seed. The generator keeps only
+// ring shapes close in energy, so for a group larger than about CH₃/OH/halogen it never gives the axial chair.
+// shortcut: per chair the lowest of a few dozen minima, not a full search; a long flexible side chain can hide a
+// lower minimum. Raise `seeds` if a verdict ever looks off.
+export function flipChair(OCL, mol, ring, seeds = 40) {
+  const heavy = s => s.filter(x => !x.h);
+  const ref = heavy(chairSubs(mol, ring));
+  const kind = m => { // 0 = same chair, 1 = flipped, -1 = neither
+    if (!isChair(m, ring)) return -1;
+    const now = heavy(chairSubs(m, ring));
+    return now.every((s, i) => s.ax === ref[i].ax) ? 0 : now.every((s, i) => s.ax !== ref[i].ax) ? 1 : -1;
+  };
+  const E = [Infinity, Infinity];
+  let best = null;
+  const take = m => {
+    m.ensureHelperArrays(OCL.Molecule.cHelperNeighbours);
+    if (kind(m) < 0) return; // the ring shape rarely changes while minimising, so skip what cannot count
+    const ff = new OCL.ForceFieldMMFF94(m, 'MMFF94s+');
+    if (ff.minimise() !== 0) return;
+    const k = kind(m), e = ff.getTotalEnergy() * 4.184;
+    if (k < 0) return;
+    E[k] = Math.min(E[k], e);
+    if (k && heavy(chairSubs(m, ring)).every((s, i) => s.up === ref[i].up) && (!best || e < best.e)) best = { e, m };
+  };
+  take(mol.getCompactCopy());
+  for (let seed = 1; seed <= seeds; seed++) {
+    const m = new OCL.ConformerGenerator(seed).getOneConformerAsMolecule(mol.getCompactCopy());
+    if (m) take(m);
+  }
+  if (!best) return null;
+  return { E, dE: Number.isFinite(E[0]) ? E[1] - E[0] : null, xyz: alignRing(best.m, mol, ring), subs: chairSubs(best.m, ring) };
+}
+
+// Coordinates of every atom of `m`, moved and turned so its ring sits on the ring of `ref`: centers together,
+// normals together, then the turn about the normal that best lines up the ring atoms. Only a rigid move.
+function alignRing(m, ref, ring) {
+  const f = ringFrame(m, ring), t = ringFrame(ref, ring);
+  const rot = (v, axis, ang) => { // Rodrigues: turn v by ang about the unit axis
+    const c = Math.cos(ang), s = Math.sin(ang), k = cross(axis, v), d = dot(axis, v);
+    return v.map((x, i) => x * c + k[i] * s + axis[i] * d * (1 - c));
+  };
+  const ax = cross(f.n, t.n), sin = Math.hypot(...ax), a1 = Math.atan2(sin, dot(f.n, t.n));
+  const axis = sin > 1e-9 ? unit(ax) : unit(cross(f.n, Math.abs(f.n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0])); // normals (anti)parallel: any perpendicular axis
+  const r1 = v => rot(v, axis, a1);
+  let sc = 0, cc = 0;
+  for (const a of ring) {
+    const p = r1(sub(pos(m, a), f.c)), q = sub(pos(ref, a), t.c);
+    sc += dot(cross(p, q), t.n); cc += dot(p, q);
+  }
+  const a2 = Math.atan2(sc, cc);
+  return Array.from({ length: m.getAllAtoms() }, (_, i) => rot(r1(sub(pos(m, i), f.c)), t.n, a2).map((x, k) => x + t.c[k]));
 }
 
 function dihedral(mol, a, b, c, d) {

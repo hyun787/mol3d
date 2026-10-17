@@ -4,7 +4,9 @@ import { resolveName } from './lookup.js';
 const $ = id => document.getElementById(id);
 const empty = $('empty'), q = $('q');
 // guess: the guess-first mode; tries[i] = { pick: 'R' | 'S', hint: true } for stereo row i in that mode
-const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false, bond: -1, phi: 0, sguess: false, stries: {}, ring: -1 };
+// chair: selected chair row; flipped: the other chair is shown; cguess/ctries: guess-first for which chair is more stable
+const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false, bond: -1, phi: 0, sguess: false, stries: {}, ring: -1,
+  chair: -1, flipped: false, cguess: false, ctries: {} };
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -17,15 +19,16 @@ if (typeof $3Dmol === 'undefined') {
 }
 const viewer = $3Dmol.createViewer($('stage'), { backgroundColor: tok('--stage'), antialias: true });
 
-// Chemistry runs in a worker. A newer request settles the older one as stale.
+// Chemistry runs in a worker: {smiles} builds a molecule, {flip: i} finds the other chair of chair i of the last one.
+// A newer request settles the older one as stale.
 const worker = new Worker('worker.js', { type: 'module' });
 let pending = null;
 worker.onmessage = ({ data }) => { if (pending?.id === data.id) pending.resolve(data); };
 worker.onerror = () => pending?.resolve({ error: 'The chemistry library did not load. Check the connection and reload.' });
-const build = smiles => new Promise(resolve => {
+const ask = msg => new Promise(resolve => {
   pending?.resolve({ stale: true });
   pending = { id: ++token, resolve };
-  worker.postMessage({ id: token, smiles });
+  worker.postMessage({ id: token, ...msg });
 });
 
 function styleFor(color) {
@@ -39,9 +42,18 @@ function styleFor(color) {
 function highlight() {
   if (state.tab === 'structure') return state.atom >= 0 ? [state.atom, ...cur.atoms[state.atom].nbrs] : cur.groups[state.hl]?.atoms;
   if (state.tab === 'stereo') return cur.stereo[state.st]?.atoms;
-  if (state.tab === 'shape') { const b = cur.bonds[state.bond]; return b ? [...b.atoms, ...b.front, ...b.back] : cur.rings[state.ring]?.atoms; }
+  if (state.tab === 'shape') {
+    const b = cur.bonds[state.bond], c = chairNow();
+    return b ? [...b.atoms, ...b.front, ...b.back] : c ? [...c.atoms, ...c.subs.map(s => s.sub)] : cur.rings[state.ring]?.atoms;
+  }
   return null;
 }
+
+// The selected chair as shown now: the flipped chair's axial/equatorial when it is flipped.
+const chairNow = () => {
+  const c = state.tab === 'shape' && cur.chairs[state.chair];
+  return !c ? null : state.flipped ? { ...c, subs: cur.flips[state.chair].subs } : c;
+};
 
 function draw() {
   if (!cur) return;
@@ -60,9 +72,11 @@ function draw() {
   document.querySelectorAll('#pane-stereo .rows button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.st)));
   document.querySelectorAll('#bonds button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.bond)));
   document.querySelectorAll('#rings button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.ring)));
+  document.querySelectorAll('#chairs button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.chair)));
   showAtom();
   showCenter();
   showNewman();
+  showChair();
   addLabels();
   viewer.render();
 }
@@ -144,7 +158,53 @@ function buildShape() {
     box.appendChild(row);
   });
   if (!cur.bonds.length) box.innerHTML = '<p class="small">No C–C single bond outside a ring with two sp³ carbons in this molecule.</p>';
+  buildChairs();
   buildRings();
+}
+
+// Chair rows: one per chair, with the ring's N or O named and the groups (not H) on it.
+function buildChairs() {
+  const box = $('chairs');
+  box.textContent = '';
+  cur.chairs.forEach((c, i) => {
+    const row = document.createElement('button'), het = [...new Set(c.atoms.map(a => cur.atoms[a].el).filter(e => e !== 'C'))];
+    const groups = c.subs.filter(s => !s.h).map(s => plain(s.sub));
+    row.innerHTML = `<span>${esc(`Chair${het.length ? ` (${het.join(' and ')} in the ring)` : ''}`)}</span>`
+      + `<span class="sub">${esc(groups.length ? `Groups on the ring: ${groups.join(', ')}` : 'Only H on the ring')}</span>`;
+    row.dataset.i = String(i);
+    row.addEventListener('click', () => setChair(state.chair === i ? -1 : i));
+    box.appendChild(row);
+  });
+  if (!cur.chairs.length) box.innerHTML = '<p class="small">No six-membered ring of sp³ atoms in a chair shape in this molecule.</p>';
+}
+
+function setChair(i) {
+  state.chair = i; state.flipped = false;
+  if (i >= 0) state.bond = state.ring = -1;
+  turn(null); // back to the 3D build: a Newman turn or the other chair goes
+  draw();
+  if (i >= 0) alignChair(cur.chairs[i]);
+}
+
+// Look at the chair from the side and a little above, as textbooks draw it: the ring's axis (normal) points up the
+// screen, tilted 20° toward the viewer, so axial bonds run up and down and equatorial bonds fan out.
+function alignChair(c) {
+  const p = c.atoms.map(i => home3d[i]), ctr = [0, 1, 2].map(k => p.reduce((s, v) => s + v[k], 0) / 6);
+  let n = [0, 0, 0];
+  p.forEach((v, i) => { const a = v.map((x, k) => x - ctr[k]), b = p[(i + 1) % 6].map((x, k) => x - ctr[k]);
+    n = n.map((x, k) => x + [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]][k]); });
+  const v = viewer.getView(), q0 = v.slice(4, 8), t = 20 * Math.PI / 180;
+  animateView([-ctr[0], -ctr[1], -ctr[2], v[3], ...qMul(qArc(qRot(q0, unit(n)), [0, Math.cos(t), Math.sin(t)]), q0)]);
+}
+
+// Below the chair rows: each group's axial/equatorial in the chair shown.
+function showChair() {
+  const c = chairNow();
+  $('chair').hidden = !c;
+  if (!c) return;
+  const g = c.subs.filter(s => !s.h);
+  $('axeq').innerHTML = g.length ? `<ul class="angles" aria-label="Axial and equatorial groups">${g.map(s => `<li><span>${esc(plain(s.sub))}</span><b>${s.ax ? 'axial' : 'equatorial'}</b></li>`).join('')}</ul>`
+    : '<p class="small">Only H on this ring: each ring carbon holds one axial and one equatorial H.</p>';
 }
 
 // Ring-size notes, shown only for rings of sp³ atoms (sp² or aromatic rings get their own line).
@@ -170,7 +230,7 @@ function buildRings() {
       + (d === null ? '' : ` · ideal ${deg(r.ideal)} · ${Math.abs(d) < 0.5 ? 'about the same' : `${deg(Math.abs(d))} ${d < 0 ? 'smaller' : 'larger'}`}`) + '</span>'
       + `<span class="sub mono">${esc(r.angles.map(deg).join(', '))}</span>` + (note ? `<span class="sub">${esc(note)}</span>` : '');
     row.dataset.i = String(i);
-    row.addEventListener('click', () => { if (state.bond >= 0) setBond(-1); state.ring = state.ring === i ? -1 : i; draw(); });
+    row.addEventListener('click', () => { state.bond = state.chair = -1; state.flipped = false; turn(null); state.ring = state.ring === i ? -1 : i; draw(); });
     box.appendChild(row);
   });
   if (!cur.rings.length) box.innerHTML = '<p class="small">No ring in this molecule.</p>';
@@ -260,8 +320,8 @@ function alignBond(b) {
 }
 
 function setBond(i, zoom = false) {
-  state.bond = i;
-  if (i >= 0) state.ring = -1;
+  state.bond = i; state.flipped = false;
+  if (i >= 0) state.ring = state.chair = -1;
   const b = cur.bonds[i];
   if (b) state.phi = Math.round(b.phi0 / 5) * 5 % 360;
   turn(b || null);
@@ -277,6 +337,9 @@ const atomAt = (i, m = 0) => viewer.getModel(m).selectedAtoms({ index: i })[0];
 function addLabels() {
   viewer.removeAllLabels();
   drawStrain();
+  const c = chairNow(); // Shape tab: ax/eq beside each group (not H) on the selected chair
+  if (c) for (const s of c.subs.filter(x => !x.h)) viewer.addLabel(s.ax ? 'ax' : 'eq', { position: atomAt(s.sub), alignment: 'bottomLeft',
+    screenOffset: { x: 6, y: 6 }, fontSize: 12, bold: true, fontColor: tok('--bg'), backgroundColor: tok(s.ax ? '--accent' : '--fg'), backgroundOpacity: 1, inFront: true });
   const r = selCenter();
   if (!r) return;
   const show = revealed(state.st);
@@ -436,13 +499,13 @@ async function run(name) {
     if (my !== seq) return; // a newer search started
     if (!hit) return showEmpty(`No structure found for “${esc(name)}”. Check the spelling, or try the IUPAC name.`);
     showEmpty('Building the 3D model…');
-    const res = await build(hit.smiles);
+    const res = await ask({ smiles: hit.smiles });
     if (my !== seq) return;
     if (res.error) return showEmpty(`<span class="err">${esc(res.error)}</span>`);
 
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
-    cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })) };
-    state.hl = state.atom = state.st = state.bond = -1; state.tries = {}; state.stries = {}; state.ring = -1;
+    cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })), flips: {} }; // flips[i]: the other chair of chair i, null if none
+    state.hl = state.atom = state.st = state.bond = state.ring = state.chair = -1; state.tries = {}; state.stries = {}; state.ctries = {}; state.flipped = false;
     if (state.mirror) setMirror(false, false);
     viewer.removeAllModels();
     viewer.addModel(res.molfile, 'sdf', { keepH: true });
@@ -491,7 +554,7 @@ const tabs = [...document.querySelectorAll('[data-tab]')];
 tabs.forEach((t, i) => {
   t.addEventListener('click', () => {
     const left = state.tab; state.tab = t.dataset.tab; showTab();
-    if (left === 'shape' && state.tab !== 'shape' && state.bond >= 0) setBond(-1, true); // the turned model is a Shape-tab view
+    if (left === 'shape' && state.tab !== 'shape' && (state.bond >= 0 || state.flipped)) setBond(-1, true); // a turned model or the other chair is a Shape-tab view
     else if (state.mirror && state.tab !== 'stereo') setMirror(false); else draw(); // the mirror image is a Stereo-tab view
   });
   t.addEventListener('keydown', e => { // arrow keys move between tabs, as in any tab list
