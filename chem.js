@@ -1148,7 +1148,7 @@ export function halides(OCL, mol, atoms) {
     out.push({ c, x, el: LEAVING[z(x)], deg: carbons.length, plain: others.every(k => [1, 6].includes(z(k))),
       neo: carbons.length === 1 && heavyNbrs(mol, carbons[0]).filter(k => z(k) === 6).length === 4,
       allylic: carbons.some(k => !mol.isAromaticAtom(k) && pi(k)), benzylic: carbons.some(k => mol.isAromaticAtom(k)),
-      cone: backside(mol, c, x) });
+      cone: backside(mol, c, x), shift: shifts(mol, atoms, c) });
   }
   for (let a = 0; a < mol.getAtoms(); a++)
     if (z(a) === 8 && hOn(mol, a).length === 1 && nbrs(mol, a).some(k => z(k) === 6 && atoms[k].hyb === 'sp3')) why.add('OH');
@@ -1187,4 +1187,55 @@ export function sn2(OCL, mol, c, x) {
   const subs = nbrs(mol, c).filter(k => k !== x), flip = p => { const t = 2 * dot(sub(p, C), d); return p.map((v, k) => v - t * d[k]); };
   placeOn(b.mol, [c, x, ...subs], [C, O, ...subs.map(k => flip(pos(mol, k)))]);
   return { product: productOut(b, { rs: rsAt(OCL, b, [c])[c] ?? null }) };
+}
+
+// SN1 textbook rule: 3° good, 2° slow, 1° and methyl none (the carbocation is too unstable), but an allylic or benzylic
+// carbon works at any degree (resonance spreads the +). Only for carbons whose other groups are C or H (null otherwise).
+export const sn1Rate = h => (!h.plain ? null : h.allylic || h.benzylic ? 'resonance' : h.deg === 3 ? 'good' : h.deg === 2 ? 'slow' : 'none');
+
+// Can a hydride or methyl shift from a neighbor carbon put the + on a more substituted carbon? A neighbor sp³ carbon b
+// with an H becomes a cation with its own carbons (c among them); one with a CH₃ becomes one with a carbon fewer.
+// Returns 'hydride', 'methyl' or null. Not asked when the carbon is allylic or benzylic: resonance already holds the +.
+function shifts(mol, atoms, c) {
+  const z = a => mol.getAtomicNo(a), carbons = a => heavyNbrs(mol, a).filter(k => z(k) === 6);
+  const deg = carbons(c).length;
+  for (const b of carbons(c)) {
+    if (atoms[b].hyb !== 'sp3') continue;
+    if (hOn(mol, b).length && carbons(b).length > deg) return 'hydride';
+    const methyl = carbons(b).some(k => k !== c && hOn(mol, k).length === 3);
+    if (methyl && carbons(b).length - 1 > deg) return 'methyl';
+  }
+  return null;
+}
+
+// SN1: the carbocation, from the model with X taken off and a + on the carbon, built fresh (MMFF94s+; only a converged
+// run counts) and moved onto the model. flat = its three bond angles add to 355° or more (the page draws it only then;
+// MMFF94s+ builds ring 3° cations at about 354.6°). Then water on each face: an O 1.43 Å from the carbon along the p
+// orbital's axis, up (+n) and down, each product built fresh and moved onto the cation; a slightly pyramidal cation still
+// has the two faces. rel = how the two relate (relation). Indexes: the cation's atom i is the model's i, or i + 1 past X.
+// Returns { cation: null } or { cation: { molfile, center, sum, flat, n }, products: [two, up first] | null, rel }.
+export function sn1(OCL, mol, c, x) {
+  const e = mol.getCompactCopy();
+  e.setAtomCharge(c, 1);
+  e.deleteAtom(x);
+  const cat = rebuild(OCL, e), k = c < x ? c : c - 1;
+  if (!cat || !cat.converged) return { cation: null };
+  const m = cat.mol, heavy = Array.from({ length: m.getAtoms() }, (_, i) => i);
+  placeOn(m, heavy, heavy.map(i => pos(mol, i < x ? i : i + 1)));
+  const nb = nbrs(m, k), C = pos(m, k), v = nb.map(a => sub(pos(m, a), C));
+  const sum = angle(v[0], v[1]) + angle(v[1], v[2]) + angle(v[0], v[2]), flat = nb.length === 3 && sum >= 355;
+  const n = unit(cross(sub(v[1], v[0]), sub(v[2], v[0])));
+  const cation = { molfile: m.toMolfile(), center: k, sum, flat, n: [n[0], -n[1], -n[2]] }; // n in the molfile's frame
+  if (nb.length !== 3) return { cation, products: null };
+  const products = [1, -1].map(s => {
+    const p = m.getCompactCopy(), O = C.map((u, j) => u + s * 1.43 * n[j]), o = p.addAtom(8);
+    p.setAtomX(o, O[0]); p.setAtomY(o, O[1]); p.setAtomZ(o, O[2]);
+    p.addBond(k, o);
+    p.setAtomCharge(k, 0);
+    const b = rebuild(OCL, p);
+    if (b) placeOn(b.mol, heavy, heavy.map(i => pos(m, i)));
+    return b;
+  });
+  if (products.some(b => !b)) return { cation, products: null };
+  return { cation, products: products.map(b => productOut(b, { rs: rsAt(OCL, b, [k])[k] ?? null })), rel: relation(OCL, products[0], products[1]).kind };
 }

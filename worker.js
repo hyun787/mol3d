@@ -1,6 +1,6 @@
 // Runs the slow chemistry (3D build, group search, ring flips) off the main thread so the page stays responsive.
 import OCL from 'https://cdn.jsdelivr.net/npm/openchemlib@9.25.1/dist/openchemlib.js';
-import { build3D, findGroups, atomInfo, kitParts, stereo, superimposable, relation, isMeso, mirrorPlane, cipCenters, fischer, newmanBonds, ringAngles, chairs, flipChair, polarity, aromaticRings, equivalentH, halides, sn2 } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, superimposable, relation, isMeso, mirrorPlane, cipCenters, fischer, newmanBonds, ringAngles, chairs, flipChair, polarity, aromaticRings, equivalentH, halides, sn2, sn1 } from './chem.js';
 
 const ready = OCL.Resources.registerFromUrl('https://cdn.jsdelivr.net/npm/openchemlib@9.25.1/dist/resources.json');
 let last = null; // the last molecule built: a ring flip ({flip: chair index}) and a comparison ({compare: SMILES}) work on it
@@ -8,9 +8,9 @@ let last = null; // the last molecule built: a ring flip ({flip: chair index}) a
 onmessage = async ({ data: { id, smiles, flip, compare, plane, react } }) => {
   try {
     await ready;
-    if (react) { // Reactions tab, on request: { kind: 'sn2', i: C–X row }
+    if (react) { // Reactions tab, on request: { kind: 'sn2' | 'sn1', i: C–X row }
       const h = last.hal.rows[react.i];
-      postMessage({ id, react: sn2(OCL, last.mol, h.c, h.x) });
+      postMessage({ id, react: { sn2, sn1 }[react.kind](OCL, last.mol, h.c, h.x) });
       return;
     }
     if (flip !== undefined) { // only on request: the conformer search takes a second or more

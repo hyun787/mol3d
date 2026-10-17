@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, isMeso, mirrorPlane, fischer, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH, halides, sn2, sn2Rate } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, isMeso, mirrorPlane, fischer, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH, halides, sn2, sn2Rate, sn1, sn1Rate } from './chem.js';
 const dihedralOf = (m, a, b, c, d) => { const p = i => [m.getAtomX(i), m.getAtomY(i), m.getAtomZ(i)], s = (u, v) => u.map((x, k) => x - v[k]), cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
   const b2 = s(p(c), p(b)), n1 = cr(s(p(b), p(a)), b2), n2 = cr(b2, s(p(d), p(c))), x = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2], y = cr(n1, n2).reduce((t, v, k) => t + v * b2[k], 0) / Math.hypot(...b2);
   return Math.atan2(y, x) * 180 / Math.PI; };
@@ -848,6 +848,44 @@ for (const [name, smi, want] of [['fluoroethane', 'CCF', 'F'], ['ethanol', 'CCO'
   const { rows, why } = rxHal(smi).hal, ok = !rows.length && why.join() === want;
   if (!ok) fail++;
   console.log(ok ? 'ok  ' : 'FAIL', 'no C–X', name.padEnd(14), why.join() || '(nothing)', ok ? '' : `(want ${want}, ${rows.length} rows)`);
+}
+// SN1: [name, SMILES, rate, shift note shown?, flat cation drawn?, relation of the two products ('' = none shown),
+// textbook products, index of the C–O carbon in their SMILES]. The products must match the textbook ones (RDKit canonical
+// isomeric SMILES), RDKit must agree on the relation (same SMILES, or one is the other with every @/@@ inverted), and each
+// product's R/S must be RDKit's. MMFF94s+ builds a ring 3° carbocation at 354.5–354.7° (flat is 360°), under the 355°
+// check: it is not drawn, but its two faces still give the two products.
+const SN1 = [
+  ['(S)-3-bromo-3-methylhexane', 'CCC[C@@](C)(Br)CC', 'good', false, true, 'enantiomers', ['CCC[C@@](C)(O)CC', 'CCC[C@](C)(O)CC'], 3],
+  ['2-bromo-2-methylpropane', 'CC(C)(C)Br', 'good', false, true, 'same', ['CC(C)(C)O'], 1],
+  ['(3R)-1-bromo-1,3-dimethylcyclohexane', 'C[C@@H]1CCCC(C)(Br)C1', 'good', false, false, 'diastereomers', ['C[C@@H]1CCC[C@](C)(O)C1', 'C[C@@H]1CCC[C@@](C)(O)C1'], 5],
+  ['2-bromo-3-methylbutane', 'CC(Br)C(C)C', 'slow', true, true, 'enantiomers', ['C[C@H](O)C(C)C', 'C[C@@H](O)C(C)C'], 1],
+  ['2-bromobutane', 'CC(Br)CC', 'slow', false, true, 'enantiomers', ['C[C@H](O)CC', 'C[C@@H](O)CC'], 1],
+  ['bromomethane', 'CBr', 'none', false], ['1-bromopropane', 'CCCBr', 'none', false],
+  ['benzyl bromide', 'BrCc1ccccc1', 'resonance', false, true, 'same', ['OCc1ccccc1'], 1], ['3-bromoprop-1-ene', 'C=CCBr', 'resonance', false, true, 'same', ['C=CCO'], 2],
+  ['2-bromo-3,3-dimethylbutane (methyl shift)', 'CC(Br)C(C)(C)C', 'slow', true, true, 'enantiomers', ['C[C@H](O)C(C)(C)C', 'C[C@@H](O)C(C)(C)C'], 1],
+];
+if (rdCIP('CCC[C@@](C)(Br)CC').CIP_atoms.map(([, l]) => l).join() !== '(S)') { fail++; console.log('FAIL SN1 test SMILES is not (S)-3-bromo-3-methylhexane'); }
+if (rdCIP('C[C@@H]1CCCC(C)(Br)C1').CIP_atoms.find(([i]) => i === 1)?.[1] !== '(R)') { fail++; console.log('FAIL SN1 test SMILES is not (3R)-1-bromo-1,3-dimethylcyclohexane'); }
+for (const [name, smi, rate, shift, flat, rel, want = [], at] of SN1) {
+  const { mol, hal } = rxHal(smi), h = hal.rows[0], bad = [], t = performance.now();
+  if (sn1Rate(h) !== rate) bad.push(`rate ${sn1Rate(h)}`);
+  if ((!['none', 'resonance'].includes(rate) && !!h.shift) !== shift) bad.push(`shift ${h.shift}`); // the page shows it only then
+  const r = rate === 'none' ? null : sn1(OCL, mol, h.c, h.x);
+  if (r) {
+    if (!r.cation || !!r.cation.flat !== flat) bad.push(`cation ${r.cation ? `${r.cation.sum.toFixed(1)}°` : 'not built'}`);
+    if (!r.products) bad.push('no products');
+    else {
+      const got = r.products.map(p => rdCan(p.smiles)), exp = want.map(rdCan);
+      if (got.some(g => !exp.includes(g)) || exp.some(e => !got.includes(e))) bad.push(`products ${r.products.map(p => p.smiles).join(' ')}`);
+      const [a, b] = r.products.map(p => p.smiles), rd = rdCan(a) === rdCan(b) ? 'same' : rdCan(a) === rdCan(b.replace(/@@?/g, x => (x === '@' ? '@@' : '@'))) ? 'enantiomers' : 'diastereomers';
+      if (r.rel !== rel || rd !== rel) bad.push(`relation ${r.rel} (RDKit ${rd})`);
+      r.products.forEach((p, i) => { const w = want[exp.indexOf(got[i])], l = w && (rdCIP(w).CIP_atoms.find(([j]) => j === at)?.[1][1] ?? null);
+        if (w && (p.rs ?? null) !== l) bad.push(`R/S ${p.rs} (RDKit ${l})`); });
+      structuredClone(r);
+    }
+  }
+  if (bad.length) fail++;
+  console.log(bad.length ? 'FAIL' : 'ok  ', 'SN1', name.padEnd(42), rate, r?.cation ? `${r.cation.sum.toFixed(1)}°` : '', r?.rel ?? '', r?.products?.map(p => p.rs).join(' ') ?? '', `${(performance.now() - t).toFixed(0)}ms`, bad.length ? `(${bad.join('; ')})` : '');
 }
 // Equivalent C–X bonds are listed once (meso-2,3-dibromobutane: mirror images; 1,2-dibromoethane), different ones apart
 for (const [smi, want] of [['C[C@@H](Br)[C@H](C)Br', 1], ['BrCCBr', 1], ['BrCCCl', 2], ['C[C@@H](Br)[C@@H](C)Br', 1]]) {

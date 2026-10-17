@@ -1,4 +1,4 @@
-import { GROUPS, KIT_PARTS, IDEAL, conformer, stericPairs, diaxial, moreStable, huckel, CONE, sn2Rate } from './chem.js';
+import { GROUPS, KIT_PARTS, IDEAL, conformer, stericPairs, diaxial, moreStable, huckel, CONE, sn2Rate, sn1Rate } from './chem.js';
 import { resolveName } from './lookup.js';
 
 const $ = id => document.getElementById(id);
@@ -17,7 +17,8 @@ const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: 
   // guess first: rguess/rpick for the relation, fguess with fdl (D/L pick) or fpicks[row] (R/S picks) for the Fischer projection
   rguess: false, rpick: null, fguess: false, fdl: null, fpicks: {},
   // Reactions tab: rp = principle (-1 none, 0 SN2, 1 SN1, 2 E2, 3 addition), rx = C–X row; xguess/xpicks: guess first, picks by result key
-  rp: -1, rx: 0, xguess: false, xpicks: {} };
+  rp: -1, rx: 0, xguess: false, xpicks: {},
+  sn1v: 'cation' }; // SN1: show the carbocation or the two products
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -963,6 +964,7 @@ const centerRS = a => cur.stereo.find(r => r.kind === 'center' && r.atom === a) 
 function rxReq() {
   const h = cur.hal.rows[state.rx];
   if (state.rp === 0 && h) return { kind: 'sn2', i: state.rx };
+  if (state.rp === 1 && h && sn1Rate(h) !== 'none') return { kind: 'sn1', i: state.rx };
   return null;
 }
 const rxKey = () => { const q = rxReq(); return q && JSON.stringify(q); };
@@ -972,6 +974,7 @@ const rxRes = () => { const k = rxKey(); return k ? cur.rxr[k] : undefined; };
 function rxAtoms() {
   const h = cur.hal.rows[state.rx];
   if (state.rp === 0 && h) return [h.c, h.x, ...h.cone];
+  if (state.rp === 1 && h) return [h.x, ...cur.atoms[h.c].nbrs];
   return null;
 }
 
@@ -1002,7 +1005,12 @@ function applyRx(animate = true) {
     q = viewTurn(unit(C.map((x, k) => x - X[k])), [-1, 0, 0]); // the back side to the left: the nucleophile comes in from there
     if (r && sn2Rate(h) !== 'none') models = [r.product.molfile];
   }
-  if (animate) rxQ = q; // the turn the models are placed for, kept while the view moves there
+  if (state.rp === 1 && h && r) {
+    const t = 20 * Math.PI / 180;
+    if (r.cation) q = viewTurn(r.cation.n, [0, Math.cos(t), Math.sin(t)]); // the p orbital's axis up, tilted 20° toward you
+    models = sn1View() === 'cation' ? [r.cation.molfile] : sn1View() === 'products' ? r.products.map(p => p.molfile) : [];
+  }
+  if (animate || !rxQ) rxQ = q; // the turn the models are placed for, kept while the view moves there
   rxModels(models, rxQ);
   draw();
   rxFrame(rxQ);
@@ -1059,6 +1067,24 @@ function drawRx() {
     if (was) rxTag(was.rs, C);
     if (rxShown() && r.product.rs && sn2Open()) rxTag(r.product.rs, P3(h.c, 1));
   }
+  if (state.rp === 1 && h && rxShown() && sn1View() === 'cation') { // the empty p orbital, and water coming to each face
+    const C = P3(r.cation.center, 1), n = r.cation.n, at = s => C.map((x, k) => x + s * n[k]);
+    for (const s of [1, -1]) {
+      rxShapes.push(viewer.addSphere({ center: xyz3(at(0.95 * s)), radius: 0.62, color: tok('--lobe'), opacity: 0.6 }));
+      rxShapes.push(viewer.addArrow({ start: xyz3(at(3.4 * s)), end: xyz3(at(1.7 * s)), radius: 0.07, radiusRatio: 2.4, mid: 0.72, color: tok('--accent'), opacity: 0.9 }));
+      rxTag('H₂O', at(3.7 * s), '--accent', { x: -16, y: s > 0 ? 6 : -10 });
+    }
+  }
+  if (state.rp === 1 && h && rxShown() && sn1View() === 'products')
+    r.products.forEach((p, i) => { if (p.rs) rxTag(p.rs, P3(r.cation.center, i + 1)); });
+}
+
+// SN1 view: 'cation' (flat ones only), 'products' (once guessed, in guess mode), or null (nothing to show yet).
+function sn1View() {
+  const r = rxRes();
+  if (!r?.cation) return null;
+  const products = r.products && xOpen(rxKey()) ? 'products' : null;
+  return r.cation.flat && (state.sn1v === 'cation' || !products) ? 'cation' : products;
 }
 
 // Guess first: picks by request key; a result is open once picked (or when the mode is off).
@@ -1106,6 +1132,8 @@ function showReact() {
   }
   const h = cur.hal.rows[state.rx], r = rxRes(), busy = rxBusy === rxKey();
   if (state.rp === 0) out.innerHTML = sn2HTML(h, r, busy);
+  if (state.rp === 1) out.innerHTML = sn1HTML(h, r, busy);
+  out.querySelectorAll('[data-sn1v]').forEach(b => b.addEventListener('click', () => { state.sn1v = b.dataset.sn1v; applyRx(false); }));
   out.querySelectorAll('[data-xpick]').forEach(b => b.addEventListener('click', () => { state.xpicks[rxKey()] = b.dataset.xpick; draw(); }));
 }
 
@@ -1125,6 +1153,43 @@ function sn2HTML(h, r, busy) {
     + `<p class="facts">${was ? `The carbon was <b>${was.rs}</b> and is <b>${rs}</b> in the product.` : `The carbon is <b>${rs}</b> in the product.`}</p>`
     + (was ? '<p class="small">Inversion turns the arrangement inside out. The R/S letter comes from the priorities, so it can stay the same when OH ranks in a different place than the leaving group did.</p>' : '')
     + (was && !was.given ? '<p class="small">The name does not set this carbon’s configuration, so the 3D build picked one.</p>' : '');
+}
+
+const SN1_RATE = {
+  good: () => '<b>3°: works well.</b> Three carbon groups hold up the + of the carbocation.',
+  slow: () => '<b>2°: slow.</b> Two carbon groups hold up the + less well.',
+  none: h => `<b>${h.deg ? '1°' : 'Methyl'}: no S<sub>N</sub>1.</b> The carbocation would be too unstable to form, so none is shown.`,
+  resonance: h => `<b>${h.benzylic ? 'Benzylic' : 'Allylic'}: works.</b> The ${h.benzylic ? 'benzene ring' : 'C=C next to it'} shares the + by resonance.`,
+};
+const REL_FACES = {
+  same: '<b>One product</b>: water gives the same compound from either face.',
+  enantiomers: '<b>A pair of enantiomers</b>: racemic, 50:50. The two faces are mirror images, so water reaches each one equally.',
+  diastereomers: '<b>Diastereomers</b>: not equal amounts. The rest of the molecule makes the two faces different.',
+};
+// Guess first for a product relationship: the choices that apply, then the verdict.
+function relGuess(choices) {
+  return '<p class="facts">How are the products from the two faces related? Pick one.</p><div class="row">'
+    + choices.map(([k, t]) => `<button data-xpick="${k}">${t}</button>`).join('') + '</div>';
+}
+
+function sn1HTML(h, r, busy) {
+  const rate = sn1Rate(h);
+  let s = `<p class="facts">${rate ? SN1_RATE[rate](h) : '<b>No verdict.</b> The textbook rule here covers carbons whose other groups are only C and H.'}</p>`
+    + `<p class="small">First the C–${h.el} bond breaks and ${h.el}⁻ leaves on its own. The carbon keeps three groups and gets a + charge: a carbocation, sp² and flat, with an empty p orbital above and below the plane. Water then bonds to either lobe and loses H⁺. E1 starts the same way, but the carbocation loses an H⁺ from a neighboring carbon and gives an alkene.</p>`;
+  if (rate === 'none') return s;
+  if (rate !== 'resonance' && h.shift) s += '<p class="facts">A hydride or methyl shift can move the + to a more stable carbon; products from that are not shown.</p>';
+  if (h.allylic && !h.benzylic) s += '<p class="small">In an allylic carbocation the + is shared with the far end of the C=C, so water can also add there; those products are not shown.</p>';
+  if (busy || r === undefined) return s + '<p class="small">Building the carbocation and its products…</p>';
+  if (!r?.cation) return s + '<p class="small">The carbocation could not be built in 3D here.</p>';
+  const c = r.cation, k = rxKey(), view = sn1View();
+  if (!c.flat) s += `<p class="small">The force field (MMFF94s+) builds this carbocation slightly pyramidal (its three bond angles add to ${c.sum.toFixed(1)}°; flat is 360°), so it is not drawn. The textbook carbocation is flat.</p>`;
+  if (!r.products) return s + '<p class="small">The products could not be built in 3D here.</p>';
+  if (c.flat && xOpen(k)) s += `<div class="row"><button data-sn1v="cation" aria-pressed="${view === 'cation'}">Carbocation</button><button data-sn1v="products" aria-pressed="${view === 'products'}">Products</button></div>`;
+  if (view === 'cation') s += `<p class="facts">Carbocation, on the right: its three bond angles add to ${c.sum.toFixed(1)}°, so it is flat (360°). Green: the empty p orbital. Arrows: water coming to the top face and to the bottom face.</p>`;
+  if (!xOpen(k)) return s + relGuess([['same', 'One product'], ['enantiomers', 'A pair of enantiomers'], ['diastereomers', 'Diastereomers']]);
+  if (view === 'products') s += `<p class="facts">Middle: water added to the top face${r.products[0].rs ? ` (${r.products[0].rs})` : ''}. Right: to the bottom face${r.products[1].rs ? ` (${r.products[1].rs})` : ''}.</p>`;
+  return s + (state.xguess ? verdictLine(state.xpicks[k], r.rel, 'see below') : '') + `<p class="facts">${REL_FACES[r.rel] || esc(r.rel)}</p>`
+    + '<p class="small">A carbon radical is flat (or nearly) too, so a reaction through a radical at this carbon reaches both faces the same way.</p>';
 }
 
 document.querySelectorAll('#rprin button').forEach(b => b.addEventListener('click', () => {
