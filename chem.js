@@ -59,7 +59,23 @@ export function build3D(OCL, smiles) {
   const given = { atoms: [], bonds: {} };
   for (let a = 0; a < mol.getAtoms(); a++) given.atoms.push(mol.getAtomParity(a));
   for (let b = 0; b < mol.getBonds(); b++) given.bonds[pairKey(mol.getBondAtom(0, b), mol.getBondAtom(1, b))] = mol.getBondParity(b);
-  const m3 = new OCL.ConformerGenerator(42).getOneConformerAsMolecule(mol);
+  // The conformer generator sometimes ignores a set parity (cis-1,2-dichloroethene comes out trans with seed 42), so a
+  // conformer whose 3D parities differ from the ones the SMILES set is thrown away and the next seed tried.
+  const keeps = m => {
+    const c = m.getCompactCopy();
+    c.ensureHelperArrays(OCL.Molecule.cHelperParities);
+    if (given.atoms.some((p, a) => [1, 2].includes(p) && c.getAtomParity(a) !== p)) return false;
+    for (let b = 0; b < c.getBonds(); b++) {
+      const p = given.bonds[pairKey(c.getBondAtom(0, b), c.getBondAtom(1, b))];
+      if ([1, 2].includes(p) && c.getBondParity(b) !== p) return false;
+    }
+    return true;
+  };
+  let m3 = null;
+  for (const seed of [42, ...Array.from({ length: 20 }, (_, i) => i + 1)]) {
+    const m = new OCL.ConformerGenerator(seed).getOneConformerAsMolecule(mol);
+    if (m && (m3 ??= m) && keeps(m)) { m3 = m; break; }
+  }
   if (!m3) throw new Error('Could not build a 3D model for this structure.');
   let minimized = true;
   try { new OCL.ForceFieldMMFF94(m3, 'MMFF94s+').minimise(); }
@@ -645,4 +661,106 @@ export function findGroups(OCL, mol) {
     out.push({ group: g, matches, atoms: [...atoms] });
   }
   return out;
+}
+
+// ---- Structure tab: polarity (bond dipoles and their vector sum) ----
+// Pauling electronegativities.
+export const EN = { H: 2.20, B: 2.04, C: 2.55, N: 3.04, O: 3.44, F: 3.98, Si: 1.90, P: 2.19, S: 2.58, Cl: 3.16, Se: 2.55, Br: 2.96, I: 2.66 };
+// A bond counts as polar from a difference of 0.4: C–N (0.49) and C≡N must count (pyridine and acetonitrile are polar),
+// C–H (0.35) must not.
+export const POLAR_BOND = 0.4;
+// The molecule is polar when the sum of the bond dipoles (each = its difference along the bond, δ+ → δ−) is at least
+// this long. Symmetric molecules come out near 0 (below 0.02 in test.mjs), polar ones at 0.3 or more.
+export const POLAR_NET = 0.1;
+// A verdict only for molecules made of these: for C–I, C–S, C–P and S–H the difference understates the bond's polarity,
+// and their lone pairs (left out here) matter more (CH₃I and dimethyl sulfide are polar).
+const VERDICT_EL = new Set(['H', 'B', 'C', 'N', 'O', 'F', 'Cl', 'Br']);
+
+// Returns { bonds: [[δ+ atom, δ− atom, difference]], net: [x, y, z], polar: true | false | null, why }.
+// why (polar = null): 'ion' (net charge) or 'element' (an atom outside VERDICT_EL). Lone pairs are not counted.
+export function polarity(mol) {
+  const bonds = [];
+  let net = [0, 0, 0], charge = 0, el = true;
+  for (let a = 0; a < mol.getAllAtoms(); a++) {
+    charge += mol.getAtomCharge(a);
+    if (!VERDICT_EL.has(mol.getAtomLabel(a))) el = false;
+  }
+  for (let b = 0; b < mol.getAllBonds(); b++) {
+    let [p, q] = [mol.getBondAtom(0, b), mol.getBondAtom(1, b)];
+    const [ep, eq] = [EN[mol.getAtomLabel(p)], EN[mol.getAtomLabel(q)]];
+    if (ep === undefined || eq === undefined) continue;
+    const d = Math.round(Math.abs(ep - eq) * 100) / 100; // 3.44 − 3.04 is 0.3999… in floating point
+    if (d < POLAR_BOND) continue;
+    if (ep > eq) [p, q] = [q, p];
+    bonds.push([p, q, d]);
+    net = net.map((v, k) => v + d * unit(sub(pos(mol, q), pos(mol, p)))[k]);
+  }
+  const why = charge ? 'ion' : el ? null : 'element';
+  return { bonds, net, polar: why ? null : Math.hypot(...net) >= POLAR_NET, why };
+}
+
+// ---- Structure tab: aromatic rings, π electrons and p orbitals ----
+// Each ring atom gives its p orbital's electrons (Kekulé bonds from OCL): 1 for a double bond to an atom of the same
+// aromatic ring system ('double'); 2 for a lone pair in the p orbital ('lp': no double bond, like pyrrole N–H, furan O,
+// a ring C⁻); 0 for an empty p orbital ('empty': a ring C⁺). A ring with any other atom is left out.
+// `planar` marks a 'double' atom whose lone pair lies in the ring plane (pyridine N), so it adds 0.
+// Rings come from OCL's ring set (up to 7 atoms) where OCL calls them aromatic. Fused rings form a system, whose
+// total counts each atom once. Returns { rings: [{ atoms, parts: [{ atom, e, why, planar }], pi, system }], systems: [{ rings, pi }] }.
+export function aromaticRings(mol) {
+  const rs = mol.getRingSet(), rings = [];
+  for (let r = 0; r < rs.getSize(); r++) if (rs.isAromatic(r)) rings.push(Array.from(rs.getRingAtoms(r)));
+  // ring systems: rings sharing an atom
+  const sys = rings.map((_, i) => i), find = i => (sys[i] === i ? i : (sys[i] = find(sys[i])));
+  rings.forEach((x, i) => rings.forEach((y, j) => { if (j > i && x.some(a => y.includes(a))) sys[find(j)] = find(i); }));
+  const sysAtoms = i => new Set(rings.filter((_, j) => find(j) === find(i)).flat());
+  const part = (a, inSys) => {
+    const lp = lonePairs(mol, a);
+    let dbl = false, exo = false;
+    for (let k = 0; k < mol.getAllConnAtoms(a); k++) if (mol.getConnBondOrder(a, k) === 2) {
+      if (inSys.has(mol.getConnAtom(a, k))) dbl = true; else exo = true;
+    }
+    if (dbl) return { atom: a, e: 1, why: 'double', planar: lp > 0 };
+    if (exo) return null; // a C=O on the ring (2-pyridone): OCL does not call these rings aromatic anyway
+    if (lp > 0) return { atom: a, e: 2, why: 'lp' };
+    if (lp === 0 && mol.getAtomCharge(a) > 0) return { atom: a, e: 0, why: 'empty' };
+    return null; // not a p-orbital atom we can count
+  };
+  const out = [], systems = new Map();
+  rings.forEach((ring, i) => {
+    const inSys = sysAtoms(i), parts = ring.map(a => part(a, inSys));
+    if (parts.some(p => !p)) return;
+    const s = find(i);
+    if (!systems.has(s)) systems.set(s, { rings: [], atoms: inSys });
+    systems.get(s).rings.push(out.length);
+    out.push({ atoms: ring, parts, pi: parts.reduce((t, p) => t + p.e, 0), system: s });
+  });
+  const list = [...systems.entries()].map(([s, v]) => {
+    const parts = [...v.atoms].map(a => part(a, v.atoms));
+    return { key: s, rings: v.rings, pi: parts.every(Boolean) ? parts.reduce((t, p) => t + p.e, 0) : null };
+  });
+  out.forEach(r => { r.system = list.findIndex(x => x.key === r.system); });
+  return { rings: out, systems: list.map(({ rings: r, pi }) => ({ rings: r, pi })) };
+}
+
+// 4n + 2 (Hückel): n, or null when the count is not 4n + 2.
+export const huckel = pi => (pi >= 2 && (pi - 2) % 4 === 0 ? (pi - 2) / 4 : null);
+
+// ---- Structure tab: chemically equivalent H (¹H NMR signals) ----
+// The substitution test: replace one H with D and write OCL's canonical code (stereo included, read from the 3D model).
+// Two H are equivalent when the two D compounds are the same (homotopic) or mirror images (enantiotopic); diastereomers
+// (diastereotopic H) stay apart. The code ignores conformation, so fast motions (CH₃ rotation, ring flip) average out.
+// Returns one class per H atom: { h: [atom], cls: [class per entry of h] }, classes numbered 0, 1, … by first appearance.
+export function equivalentH(mol) {
+  const h = [], keys = [];
+  for (let a = 0; a < mol.getAllAtoms(); a++) {
+    if (mol.getAtomicNo(a) !== 1) continue;
+    const m = mol.getCompactCopy();
+    m.setAtomMass(a, 2);
+    const id = m.getIDCode();
+    for (let i = 0; i < m.getAllAtoms(); i++) m.setAtomX(i, -m.getAtomX(i));
+    h.push(a);
+    keys.push([id, m.getIDCode()].sort().join(' '));
+  }
+  const seen = [];
+  return { h, cls: keys.map(k => (seen.includes(k) ? seen : (seen.push(k), seen)).indexOf(k)) };
 }

@@ -1,7 +1,10 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH } from './chem.js';
+const dihedralOf = (m, a, b, c, d) => { const p = i => [m.getAtomX(i), m.getAtomY(i), m.getAtomZ(i)], s = (u, v) => u.map((x, k) => x - v[k]), cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+  const b2 = s(p(c), p(b)), n1 = cr(s(p(b), p(a)), b2), n2 = cr(b2, s(p(d), p(c))), x = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2], y = cr(n1, n2).reduce((t, v, k) => t + v * b2[k], 0) / Math.hypot(...b2);
+  return Math.atan2(y, x) * 180 / Math.PI; };
 import { resolveName } from './lookup.js';
 
 OCL.Resources.registerFromNodejs();
@@ -530,6 +533,99 @@ for (const name of Object.keys(A)) {
 }
 if (!(axMinusEq('methylcyclohexane') > axMinusEq('cyclohexylamine') && axMinusEq('cyclohexylamine') > axMinusEq('cyclohexanol'))) { fail++; console.log('FAIL MMFF order CH₃ > NH₂ > OH'); }
 
+// ---- Polarity: textbook polar / nonpolar from the vector sum of bond dipoles (POLAR_BOND, POLAR_NET in chem.js).
+// Nonpolar ones must sum to under 0.02 and polar ones to 0.3 or more, so the 0.1 cutoff sits well clear of both.
+// hexane has no polar bond at all, so its answer does not depend on the conformer.
+const POL = [
+  ['CO2', 'O=C=O', false], ['BF3', 'FB(F)F', false], ['CH4', 'C', false], ['CCl4', 'ClC(Cl)(Cl)Cl', false],
+  ['trans-1,2-dichloroethene', 'Cl/C=C/Cl', false], ['p-dichlorobenzene', 'Clc1ccc(Cl)cc1', false], ['benzene', 'c1ccccc1', false],
+  ['hexane', 'CCCCCC', false], ['CF4', 'FC(F)(F)F', false], ['1,3,5-trichlorobenzene', 'Clc1cc(Cl)cc(Cl)c1', false],
+  ['H2O', 'O', true], ['NH3', 'N', true], ['CH3Cl', 'CCl', true], ['CH2Cl2', 'ClCCl', true], ['CHCl3', 'ClC(Cl)Cl', true],
+  ['cis-1,2-dichloroethene', 'Cl/C=C\\Cl', true], ['o-dichlorobenzene', 'Clc1ccccc1Cl', true], ['acetone', 'CC(C)=O', true],
+  ['ethanol', 'CCO', true], ['pyridine', 'c1ccncc1', true], ['acetonitrile', 'CC#N', true], ['trimethylamine', 'CN(C)C', true],
+  ['bromomethane', 'CBr', true],
+  ['iodomethane', 'CI', null], ['dimethyl sulfide', 'CSC', null], ['acetate', 'CC(=O)[O-]', null],
+];
+for (const [name, smi, want] of POL) {
+  const { mol, minimized } = build3D(OCL, smi), p = polarity(mol), len = Math.hypot(...p.net);
+  // BF3: MMFF94s+ has no boron types, so the raw conformer (angles 118–121°) stays and sums to about 0.06
+  const ok = p.polar === want && (want === null || (want ? len >= 0.3 : len < (minimized ? 0.02 : 0.08))) && (name !== 'hexane' || !p.bonds.length);
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'polar', name.padEnd(26), p.polar === null ? `no verdict (${p.why})` : p.polar ? 'polar' : 'nonpolar', `sum ${len.toFixed(3)}`, ok ? '' : `(want ${want})`);
+}
+// Conformation decides for 1,2-dichloroethane: anti (Cl–C–C–Cl 180°) sums to 0, gauche does not.
+{ const { mol } = build3D(OCL, 'ClCCCl'), p = polarity(mol);
+  const [a, b] = [0, 3], t = Math.abs(dihedralOf(mol, a, 1, 2, b));
+  const ok = t > 170 && p.polar === false;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'polar 1,2-dichloroethane anti in the model:', `Cl–C–C–Cl ${t.toFixed(0)}°`, p.polar ? 'polar' : 'nonpolar');
+  // turn one CH2Cl by 120° about the C–C bond (to gauche) and sum again
+  const g = mol.getCompactCopy(), [o, u] = [[g.getAtomX(1), g.getAtomY(1), g.getAtomZ(1)], [g.getAtomX(2), g.getAtomY(2), g.getAtomZ(2)]];
+  const k = u.map((x, i) => x - o[i]), n = Math.hypot(...k), ax = k.map(x => x / n), c = Math.cos(2 * Math.PI / 3), s = Math.sin(2 * Math.PI / 3);
+  g.ensureHelperArrays(OCL.Molecule.cHelperNeighbours);
+  const side = [3, ...Array.from({ length: g.getAllConnAtoms(2) }, (_, j) => g.getConnAtom(2, j)).filter(x => x !== 1)];
+  for (const i of new Set(side)) {
+    const v = [g.getAtomX(i) - u[0], g.getAtomY(i) - u[1], g.getAtomZ(i) - u[2]], d = v[0] * ax[0] + v[1] * ax[1] + v[2] * ax[2];
+    const cr = [ax[1] * v[2] - ax[2] * v[1], ax[2] * v[0] - ax[0] * v[2], ax[0] * v[1] - ax[1] * v[0]];
+    const r = v.map((x, j) => x * c + cr[j] * s + ax[j] * d * (1 - c));
+    g.setAtomX(i, r[0] + u[0]); g.setAtomY(i, r[1] + u[1]); g.setAtomZ(i, r[2] + u[2]);
+  }
+  const pg = polarity(g), t2 = Math.abs(dihedralOf(g, a, 1, 2, b)), ok2 = Math.abs(t2 - 60) < 10 && pg.polar === true;
+  if (!ok2) fail++;
+  console.log(ok2 ? 'ok  ' : 'FAIL', 'polar 1,2-dichloroethane gauche:', `Cl–C–C–Cl ${t2.toFixed(0)}°`, pg.polar ? 'polar' : 'nonpolar');
+}
+
+// ---- Aromatic rings: π electrons per ring, per atom (heavy atoms in SMILES order), and per fused system.
+// [name, SMILES, rings as "π: atom contributions" sorted, system totals]
+const AROM = [
+  ['benzene', 'c1ccccc1', ['6:111111'], [6]],
+  ['pyridine', 'c1ccncc1', ['6:111111'], [6]], // N: C=N bond 1, its lone pair in the plane
+  ['pyrrole', 'c1cc[nH]c1', ['6:11121'], [6]],
+  ['furan', 'c1ccoc1', ['6:11121'], [6]],
+  ['thiophene', 'c1ccsc1', ['6:11121'], [6]],
+  ['imidazole', 'c1cnc[nH]1', ['6:11112'], [6]],
+  ['naphthalene', 'c1ccc2ccccc2c1', ['6:111111', '6:111111'], [10]],
+  ['indole', 'c1ccc2[nH]ccc2c1', ['6:111111', '6:12111'], [10]], // 5-ring atoms 3 (C), 4 (N–H), 5, 6, 7
+  ['cyclopentadienyl anion', '[cH-]1cccc1', ['6:21111'], [6]],
+  ['tropylium', '[cH+]1cccccc1', ['6:0111111'], [6]],
+];
+for (const [name, smi, rings, systems] of AROM) {
+  const { mol } = build3D(OCL, smi), at = atomInfo(mol), ar = aromaticRings(mol);
+  const got = ar.rings.map(r => `${r.pi}:${[...r.parts].sort((x, y) => x.atom - y.atom).map(p => p.e).join('')}`).sort();
+  const sys = ar.systems.map(s => s.pi).sort((x, y) => x - y);
+  // 1a agreement: an atom giving a lone pair (2) is sp² by resonance; one with a double bond (1) is sp² without it
+  const clash = ar.rings.flatMap(r => r.parts).filter(p => at[p.atom].hyb && (at[p.atom].hyb !== 'sp2' || !!at[p.atom].resonance !== (p.why === 'lp')));
+  const planarN = name === 'pyridine' ? ar.rings[0].parts.find(p => at[p.atom].el === 'N').planar : true;
+  const ok = got.join() === [...rings].sort().join() && sys.join() === systems.join() && !clash.length && planarN
+    && ar.rings.every(r => huckel(ar.systems[r.system].pi) !== null);
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'arom', name.padEnd(24), got.join(' '), '| system', sys.join(' '), ok ? '' : `(want ${rings.join(' ')} | ${systems.join(' ')}${clash.length ? '; disagrees with hybridization at ' + clash.map(p => p.atom) : ''})`);
+}
+if (aromaticRings(build3D(OCL, 'C1=CC=CCC1').mol).rings.length) { fail++; console.log('FAIL arom: 1,3-cyclohexadiene is not aromatic'); }
+
+// ---- Equivalent H (¹H NMR signals)
+const NMR = [
+  ['ethanol', 'CCO', 3], ['acetone', 'CC(C)=O', 1], ['ethyl acetate', 'CCOC(C)=O', 3], ['toluene', 'Cc1ccccc1', 4],
+  ['p-xylene', 'Cc1ccc(C)cc1', 2], ['2-butanone', 'CCC(C)=O', 3], ['propanoic acid', 'CCC(=O)O', 3],
+  ['2-chlorobutane', 'CCC(C)Cl', 5], ['(R)-2-chlorobutane', 'CC[C@@H](C)Cl', 5], ['cyclohexane', 'C1CCCCC1', 1],
+  ['benzene', 'c1ccccc1', 1], ['isopropyl alcohol', 'CC(C)O', 3], ['1-chloropropane', 'CCCCl', 3],
+  ['propene', 'C=CC', 4], ['methylcyclohexane', 'CC1CCCCC1', 8], ['meso-2,3-dibromobutane', 'C[C@@H](Br)[C@H](C)Br', 2],
+];
+for (const [name, smi, want] of NMR) {
+  const { mol } = build3D(OCL, smi), { h, cls } = equivalentH(mol), n = new Set(cls).size;
+  let ok = n === want && h.length === cls.length;
+  if (name === '2-chlorobutane') { // the CH₂ H pair (on heavy atom 1) must be split: diastereotopic
+    const pair = h.map((a, i) => [a, cls[i]]).filter(([a]) => mol.getConnAtom(a, 0) === 1).map(([, c]) => c);
+    ok &&= pair.length === 2 && pair[0] !== pair[1];
+  }
+  if (name === 'ethanol') { // the CH₂ pair is enantiotopic: one signal
+    const pair = h.map((a, i) => [a, cls[i]]).filter(([a]) => mol.getConnAtom(a, 0) === 1).map(([, c]) => c);
+    ok &&= pair.length === 2 && pair[0] === pair[1];
+  }
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'nmr', name.padEnd(24), `${n} signals`, ok ? '' : `(want ${want})`);
+}
+
 // worker.js turns flipped-chair coordinates into the molfile's frame, which writes y and z negated: check that rule.
 { const { mol } = build3D(OCL, 'CC1CCCCC1'), lines = mol.toMolfile().split('\n');
   const bad = Array.from({ length: mol.getAllAtoms() }, (_, i) => lines[4 + i].slice(0, 30).trim().split(/\s+/).map(Number))
@@ -537,7 +633,8 @@ if (!(axMinusEq('methylcyclohexane') > axMinusEq('cyclohexylamine') && axMinusEq
   if (bad) { fail++; console.log('FAIL molfile frame is no longer (x, −y, −z): fix the turn in worker.js'); } }
 
 // The worker posts these to the page, so they must survive structured cloning (OCL's own arrays do not).
-try { const m = build3D(OCL, 'CC1CCC2CCCCC2C1').mol, at = atomInfo(m); structuredClone({ b: newmanBonds(OCL, m, at), r: ringAngles(m, at), c: chairs(m, at) }); }
+try { const m = build3D(OCL, 'CC1CCC2CCCCC2C1').mol, at = atomInfo(m); structuredClone({ b: newmanBonds(OCL, m, at), r: ringAngles(m, at), c: chairs(m, at) });
+  const n = build3D(OCL, 'c1ccc2[nH]ccc2c1').mol; structuredClone({ p: polarity(n), a: aromaticRings(n), e: equivalentH(n) }); }
 catch (e) { fail++; console.log('FAIL Shape data cannot be posted from the worker:', e.message); }
 
 // Name lookup: OPSIN rejects, PubChem is busy (503), then unreachable, then answers.
