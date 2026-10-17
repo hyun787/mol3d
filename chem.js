@@ -549,8 +549,9 @@ export function diaxial(chair) {
 // conformer whose groups keep their faces (a true flip, not its mirror image), turned to sit on the model's ring.
 // Returns null when no flipped chair turns up.
 // One conformer per seed (getOneConformerAsMolecule, about 30 ms; initializeConformers costs about 600 ms a seed).
-// The ring shape comes from the generator's ring-fragment step, which changes with the seed. The generator keeps only
-// ring shapes close in energy, so for a group larger than about CH₃/OH/halogen it never gives the axial chair.
+// The ring shape comes from the generator's ring-fragment step, which changes with the seed. Tested: it gives both
+// chairs for CH₃, OH, NH₂, halogens, C≡N and the dimethylcyclohexanes, but never the axial chair for ethyl or anything
+// larger (tert-butyl, isopropyl, phenyl, OCH₃, COOH, vinyl, menthol, glucose), with any seed or strategy.
 // shortcut: per chair the lowest of a few dozen minima, not a full search; a long flexible side chain can hide a
 // lower minimum. Raise `seeds` if a verdict ever looks off.
 export function flipChair(OCL, mol, ring, seeds = 40) {

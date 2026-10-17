@@ -225,7 +225,7 @@ function showChair() {
   btn.setAttribute('aria-pressed', String(state.flipped));
   $('flip-out').textContent = c.block ? NO_FLIP[c.block]
     : flipping === state.chair ? 'Looking for the other chair…'
-    : f === null ? 'Flip not available: the conformer search found no other chair. Its 3D builder (OpenChemLib) leaves out ring shapes it rates much higher in energy, which happens when a large group would turn axial.'
+    : f === null ? 'Flip not available: the conformer search (OpenChemLib) did not build the other chair. This happens when a group larger than CH₃ or OH would turn axial, as with tert-butyl.'
     : f ? (state.flipped ? 'Showing the flipped chair: each axial group is now equatorial, and each equatorial group axial.' : 'Showing the chair as built.') : '';
   $('flip-note').textContent = f ? 'The animation slides each atom straight to its new place. A real ring flip passes through half-chair and twist-boat forms.' : '';
   $('stable').innerHTML = f ? stableHTML(c, f) : '';
