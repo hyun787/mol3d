@@ -310,26 +310,29 @@ const NEWMAN = [
   ['2,2-dimethylbutane', 'CC(C)(C)CC', '0-1 1-4 4-5', true], ['methylcyclohexane', 'CC1CCCCC1', '0-1', true],
   ['1,2-dichloroethane', 'ClCCCl', '1-2*', false], ['ethanol', 'CCO', '0-1', false],
   ['propene', 'CC=C', '', false], ['toluene', 'Cc1ccccc1', '', false], ['cyclohexane', 'C1CCCCC1', '', false],
+  ['propylbenzene', 'CCCc1ccccc1', '0-1 1-2*', true], ['1-pentene', 'C=CCCC', '2-3* 3-4', true], ['propanal', 'CCC=O', '0-1', false],
+  ['hexenylcyclohexanol', 'C(CC/C=C/C)[C@H]1[C@@H](CCCC1)O', '0-1* 1-2* 0-6', true],
 ];
 // Independent check of the order: Newman angles straight from the 3D model (own projection, no rounding), each form's
 // energy from the textbook increments, ranked the same way. The result must match `levels` exactly.
+// Same chemistry rule as chem.js: any two non-H groups count when eclipsed, only two sp³ carbons when gauche.
 const INC = { HH: 4.0, HX: 6.0, XX: 11, gauche: 3.8 }; // kJ/mol: eclipsed pairs, and gauche CH3/CH3
 const vsub = (p, q) => p.map((v, i) => v - q[i]), vdot = (p, q) => p.reduce((s, v, i) => s + v * q[i], 0);
-function textbookLevels(mol, { atoms: [F, B], front, back, x, phi0 }) {
+function textbookLevels(mol, at, { atoms: [F, B], front, back, x, phi0 }) {
   const P = a => [mol.getAtomX(a), mol.getAtomY(a), mol.getAtomZ(a)];
   const ax = vsub(P(B), P(F)), u = ax.map(v => v / Math.hypot(...ax));
   const flat = a => { const v = vsub(P(a), P(front.includes(a) ? F : B)); return vsub(v, u.map(k => k * vdot(v, u))); };
   const r = flat(x[0]), s = [u[1] * r[2] - u[2] * r[1], u[2] * r[0] - u[0] * r[2], u[0] * r[1] - u[1] * r[0]];
   const th = a => { const v = flat(a); return Math.atan2(vdot(v, s), vdot(v, r)) * 180 / Math.PI; };
-  const heavy = a => mol.getAtomicNo(a) !== 1;
-  const close = []; // non-H/non-H pairs that are eclipsed or gauche at each form: the steric-strain count
+  const heavy = a => mol.getAtomicNo(a) !== 1, sp3 = a => at[a].el === 'C' && at[a].hyb === 'sp3';
+  const close = []; // pairs in steric strain at each form: two sp³ carbons eclipsed or gauche, any two non-H groups eclipsed
   const E = [0, 60, 120, 180, 240, 300].map(phi => {
     let e = 0, n = 0;
     for (const f of front) for (const b of back) {
       const d = Math.abs(((th(b) + phi - phi0 - th(f)) % 360 + 540) % 360 - 180); // 0 = eclipsed, 180 = anti
-      if (d < 90 && heavy(f) && heavy(b)) n++;
+      if ((d < 90 && sp3(f) && sp3(b)) || (d < 30 && heavy(f) && heavy(b))) n++;
       if (d < 30) e += heavy(f) && heavy(b) ? INC.XX : heavy(f) || heavy(b) ? INC.HX : INC.HH;
-      else if (d < 90 && heavy(f) && heavy(b)) e += INC.gauche;
+      else if (d < 90 && sp3(f) && sp3(b)) e += INC.gauche;
     }
     close.push(n);
     return Math.round(e * 10);
@@ -338,16 +341,16 @@ function textbookLevels(mol, { atoms: [F, B], front, back, x, phi0 }) {
   return Object.assign(E.map(k => keys.indexOf(k)), { close });
 }
 for (const [name, smi, want, ranked] of NEWMAN) {
-  const { mol } = build3D(OCL, smi), bonds = newmanBonds(OCL, mol, atomInfo(mol));
+  const { mol } = build3D(OCL, smi), at = atomInfo(mol), bonds = newmanBonds(OCL, mol, at);
   const got = bonds.map(b => b.atoms.join('-') + (b.ref ? '*' : '')).join(' ');
   // ranked: order and steric pairs at each form both match the independent check; unranked: no order, no steric pairs
   const bad = bonds.filter(b => ranked
-    ? b.levels?.join() !== textbookLevels(mol, b).join() || [0, 60, 120, 180, 240, 300].map(p => stericPairs(b, p).length).join() !== textbookLevels(mol, b).close.join()
+    ? b.levels?.join() !== textbookLevels(mol, at, b).join() || [0, 60, 120, 180, 240, 300].map(p => stericPairs(b, p).length).join() !== textbookLevels(mol, at, b).close.join()
     : b.levels || [0, 30, 60].some(p => stericPairs(b, p).length));
   const ok = got === want && !bad.length;
   if (!ok) fail++;
   console.log(ok ? 'ok  ' : 'FAIL', 'newman', name.padEnd(20), got || '(none)', bonds.map(b => b.levels?.join('') ?? '-').join(' '),
-    ok ? '' : `(want ${want}, ${ranked ? 'textbook ' + bad.map(b => textbookLevels(mol, b).join('')).join(' ') : 'no ranking'})`);
+    ok ? '' : `(want ${want}, ${ranked ? 'textbook ' + bad.map(b => textbookLevels(mol, at, b).join('')).join(' ') : 'no ranking'})`);
 }
 // Butane C2–C3 by hand: 0° (CH3/CH3 eclipsed) > 120° = 240° (H/CH3 eclipsed) > 60° = 300° (gauche) > 180° (anti)
 const bu = newmanBonds(OCL, build3D(OCL, 'CCCC').mol, atomInfo(build3D(OCL, 'CCCC').mol))[1];
@@ -359,6 +362,39 @@ for (const [phi, want] of [[0, 1], [30, 1], [60, 1], [65, 1], [70, 0], [120, 0],
 }
 const ethB = newmanBonds(OCL, build3D(OCL, 'CC').mol, atomInfo(build3D(OCL, 'CC').mol))[0];
 if ([0, 60].some(p => stericPairs(ethB, p).length)) { fail++; console.log('FAIL ethane has no steric pairs'); }
+
+// Propylbenzene CH2–CH2 (phenyl and CH3): eclipsed groups still highest, but anti and gauche at one level, and the
+// pink rod only when eclipsed. Pairs: the CH3 carbon (atom 0) and the ring carbon (atom 3).
+const pb = newmanBonds(OCL, build3D(OCL, 'CCCc1ccccc1').mol, atomInfo(build3D(OCL, 'CCCc1ccccc1').mol))[1];
+if (pb.levels.join('') !== '201010' || !pb.flat) { fail++; console.log('FAIL propylbenzene order', pb.levels, pb.flat); }
+for (const [phi, want] of [[0, 1], [5, 1], [10, 0], [60, 0], [180, 0]])
+  if (stericPairs(pb, phi).length !== want) { fail++; console.log('FAIL propylbenzene steric pairs at', phi, `(want ${want})`); }
+
+// Why a flat group counts when eclipsed but not when gauche: MMFF94s+ minima from anti and gauche starts.
+// gauche − anti for butane (CH3/CH3) is about 3.3 kJ/mol; with a phenyl or vinyl group it is under 1 kJ/mol.
+function gaucheMinusAnti(smi, [a, b, c, d]) {
+  const { mol } = build3D(OCL, smi);
+  const P = (m, i) => [m.getAtomX(i), m.getAtomY(i), m.getAtomZ(i)];
+  const crs = (p, q) => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
+  const dih = m => { const [pa, pb, pc, pd] = [a, b, c, d].map(i => P(m, i)), b1 = vsub(pb, pa), b2 = vsub(pc, pb), b3 = vsub(pd, pc);
+    const n1 = crs(b1, b2), n2 = crs(b2, b3); return Math.atan2(vdot(crs(n1, b2.map(v => v / Math.hypot(...b2))), n2), vdot(n1, n2)) * 180 / Math.PI; };
+  const energyAt = target => {
+    const m = mol.getCompactCopy(); m.ensureHelperArrays(OCL.Molecule.cHelperNeighbours);
+    const side = new Set([c]); for (const i of side) for (let k = 0; k < m.getAllConnAtoms(i); k++) { const j = m.getConnAtom(i, k); if (j !== b) side.add(j); }
+    const o = P(m, b), ax = vsub(P(m, c), o), u = ax.map(v => v / Math.hypot(...ax)), t = (target - dih(m)) * Math.PI / 180;
+    for (const i of side) { const v = vsub(P(m, i), o), kv = crs(u, v), kd = vdot(u, v);
+      const r = v.map((x, j) => x * Math.cos(t) + kv[j] * Math.sin(t) + u[j] * kd * (1 - Math.cos(t)) + o[j]); m.setAtomX(i, r[0]); m.setAtomY(i, r[1]); m.setAtomZ(i, r[2]); }
+    new OCL.ForceFieldMMFF94(m, 'MMFF94s+').minimise();
+    return new OCL.ForceFieldMMFF94(m, 'MMFF94s+').getTotalEnergy() * 4.184;
+  };
+  return Math.min(energyAt(60), energyAt(-60)) - energyAt(180);
+}
+for (const [name, smi, quad, lo, hi] of [['butane', 'CCCC', [0, 1, 2, 3], 2, 5], ['propylbenzene', 'CCCc1ccccc1', [0, 1, 2, 3], -0.5, 1.5],
+  ['1-pentene', 'C=CCCC', [1, 2, 3, 4], -0.5, 1.5]]) {
+  const d = gaucheMinusAnti(smi, quad), ok = d >= lo && d <= hi;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'MMFF gauche − anti', name.padEnd(14), `${d.toFixed(2)} kJ/mol`, ok ? '' : `(want ${lo} to ${hi})`);
+}
 
 // What the slider position shows: [phi, references?, expected]
 for (const [phi, ref, want] of [[180, true, 'staggered anti'], [60, true, 'staggered gauche'], [300, true, 'staggered gauche'],

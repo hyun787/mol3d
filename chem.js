@@ -364,15 +364,19 @@ const unit = v => { const n = Math.hypot(...v); return v.map(x => x / n); };
 // the reference groups when each carbon has exactly one non-H group (then 180° is anti), otherwise the first non-H
 // (or first H) group on each carbon. `phi0` = that dihedral in the 3D model; `side` = atoms that turn with B.
 // `levels` order the six forms at 0°, 60° … 300° (0 = most stable) by the textbook rule: eclipsed is above staggered;
-// among eclipsed forms, more non-H/non-H eclipsed pairs is higher; among staggered forms, more non-H/non-H gauche
-// pairs is higher. This is the same order the textbook increments give (H/H 4.0, H/CH3 6.0, CH3/CH3 11 kJ/mol eclipsed,
-// gauche CH3/CH3 3.8), checked in test.mjs.
-// shortcut: ranked only when every group is H or an sp³ carbon, and all alkyls count alike. Polar or sp² groups can
-// change the order (1,2-difluoroethane prefers gauche); add them only with checked data.
+// among eclipsed forms, more non-H/non-H eclipsed pairs is higher; among staggered forms, more gauche pairs of sp³
+// carbons is higher. For alkyl groups this is the order the textbook increments give (H/H 4.0, H/CH3 6.0, CH3/CH3
+// 11 kJ/mol eclipsed, gauche CH3/CH3 3.8), checked in test.mjs.
+// Groups covered: H, sp³ carbon, and a "flat" carbon (sp² with only C and H on it: a C=C or benzene-ring carbon).
+// A flat group counts when eclipsed but not when gauche: it turns aside, and MMFF94s+ puts gauche only 0.3–0.9 kJ/mol
+// above anti for propylbenzene and 1-pentene (3.3 for butane), also checked in test.mjs. `flat` = the bond has one.
+// shortcut: all alkyls count alike, and polar groups are not ranked (1,2-difluoroethane prefers gauche; C=O carbons
+// carry dipoles); add them only with checked data.
 export function newmanBonds(OCL, mol, atoms) {
   mol.ensureHelperArrays(OCL.Molecule.cHelperSymmetrySimple);
   const isH = a => mol.getAtomicNo(a) === 1;
   const sp3C = a => mol.getAtomicNo(a) === 6 && atoms[a].hyb === 'sp3';
+  const flatC = a => mol.getAtomicNo(a) === 6 && atoms[a].hyb === 'sp2' && nbrs(mol, a).every(n => [1, 6].includes(mol.getAtomicNo(n)));
   const seen = new Set(), out = [];
   for (let b = 0; b < mol.getAllBonds(); b++) {
     const [F, B] = [mol.getBondAtom(0, b), mol.getBondAtom(1, b)].sort((p, q) => p - q);
@@ -393,29 +397,32 @@ export function newmanBonds(OCL, mol, atoms) {
     const side = new Set([B]);
     for (const a of side) for (const n of nbrs(mol, a)) if (n !== F) side.add(n); // the bond is not in a ring
     let levels = null, xx = null;
-    if ([...front, ...back].every(a => isH(a) || sp3C(a))) {
-      // xx: each non-H/non-H pair as [front atom, back atom, offset]; at slider angle phi their Newman angle is phi + offset
-      xx = heavy(front).flatMap(f => heavy(back).map(k => [f, k, slot(k, B, phi0) - slot(f, F, 0)]));
+    const hasFlat = [...front, ...back].some(flatC);
+    if ([...front, ...back].every(a => isH(a) || sp3C(a) || flatC(a))) {
+      // xx: each non-H/non-H pair as [front atom, back atom, offset, gauche counts]; at slider angle phi their Newman
+      // angle is phi + offset. Gauche counts only between two sp³ carbons.
+      xx = heavy(front).flatMap(f => heavy(back).map(k => [f, k, slot(k, B, phi0) - slot(f, F, 0), sp3C(f) && sp3C(k)]));
       const key = [0, 60, 120, 180, 240, 300].map(phi => {
         const ecl = phi % 120 === 0;
-        const n = xx.filter(([, , o]) => { const d = (phi + o + 720) % 360; return ecl ? d === 0 : d === 60 || d === 300; }).length;
+        const n = xx.filter(([, , o, g]) => { const d = (phi + o + 720) % 360; return ecl ? d === 0 : g && (d === 60 || d === 300); }).length;
         return (ecl ? 100 : 0) + n;
       });
       const keys = [...new Set(key)].sort((p, q) => p - q);
       levels = key.map(k => keys.indexOf(k));
     }
-    out.push({ atoms: [F, B], front, back, x, ref, phi0, side: [...side], levels, xx });
+    out.push({ atoms: [F, B], front, back, x, ref, phi0, side: [...side], levels, xx, flat: hasFlat });
   }
   return out;
 }
 
 // Steric (van der Waals) strain at slider angle phi: the non-H/non-H pairs of a ranked bond whose Newman angle is 65° or
-// less, from gauche (60° ± 5°) down to eclipsed. Returns [front atom, back atom, angle 0–180°] for each pair.
+// less, from gauche (60° ± 5°) down to eclipsed; a pair with a flat group only when eclipsed (5° or less), since its
+// gauche form costs almost nothing. Returns [front atom, back atom, angle 0–180°] for each pair.
 // Pairs with H are left out: in the textbook split (McMurry), CH3/CH3 gauche is steric strain, CH3/CH3 eclipsed is
 // torsional + steric, and H/CH3 eclipsed is mostly torsional.
 export function stericPairs(bond, phi) {
-  return (bond.xx || []).map(([f, k, o]) => { const d = ((phi + o) % 360 + 360) % 360; return [f, k, Math.min(d, 360 - d)]; })
-    .filter(([, , a]) => a <= 65);
+  return (bond.xx || []).map(([f, k, o, g]) => { const d = ((phi + o) % 360 + 360) % 360; return [f, k, Math.min(d, 360 - d), g]; })
+    .filter(([, , a, g]) => a <= (g ? 65 : 5)).map(([f, k, a]) => [f, k, a]);
 }
 
 // The form at slider angle phi (the x-pair dihedral): staggered or eclipsed within 5°, otherwise in between (kind null).

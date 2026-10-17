@@ -204,8 +204,10 @@ function showNewman() {
   });
   $('curve').innerHTML = b.levels && open ? curveSVG(b, `${p}–C–C–${q}`) : '';
   $('curve-note').textContent = !open ? '' : b.levels
-    ? 'Schematic: the curve shows which forms are higher in energy, not by how much. It follows the textbook rule: eclipsed forms sit above staggered ones, and each pair of carbon groups that is eclipsed or gauche raises the energy. Tap the curve to turn to that angle.'
-    : 'No curve for this bond. Groups other than H and sp³ carbon (Cl, O, N, F, or a C=C or C=O carbon) bring in polarity and other effects that can change which form is lowest: 1,2-difluoroethane, for example, prefers gauche. Staggered forms are still usually lower than eclipsed ones.';
+    ? 'Schematic: the curve shows which forms are higher in energy, not by how much. It follows the textbook rule: eclipsed forms sit above staggered ones, and each pair of carbon groups that is eclipsed or gauche raises the energy.'
+      + (b.flat ? ' A C=C or benzene-ring group turns aside, so its gauche form costs almost nothing (under 1 kJ/mol by MMFF94s+), and only its eclipsed forms count.' : '')
+      + ' Tap the curve to turn to that angle.'
+    : 'No curve for this bond. Groups other than H, sp³ carbon, and C=C or benzene-ring carbon (Cl, O, N, F, or a C=O carbon) bring in polarity and other effects that can change which form is lowest: 1,2-difluoroethane, for example, prefers gauche. Staggered forms are still usually lower than eclipsed ones.';
 }
 
 // The angles among 0°, 60° … 300° whose form has order r, as an English list.
