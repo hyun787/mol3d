@@ -54,7 +54,8 @@ h1 { margin: 0; font-size: 1.75rem; font-weight: 600; letter-spacing: -0.01em; t
    height 0 leaves the row's height to the model; min-height then fills that row. The negative margins give the padding
    (focus outlines, a scrollbar) room without narrowing the 280px column. Stacked on phones: one page scroll. */
 @media (min-width: 761px) {
-  .panel { align-self: stretch; height: 0; min-height: calc(100% + 8px); overflow-y: auto; overscroll-behavior: contain;
+  /* max-content rows: in a fixed-height grid, rows of overflow:hidden items (the tab row) would shrink to 0 */
+  .panel { align-self: stretch; height: 0; min-height: calc(100% + 8px); overflow-y: auto; overscroll-behavior: contain; grid-auto-rows: max-content;
     margin: -4px -14px -4px -4px; padding: 4px 14px 4px 4px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 }
 .stage-box { display: grid; gap: 6px; min-width: 0; }
