@@ -363,10 +363,37 @@ export function handedness(mol, center, order) {
 // its reflection. That judges the configuration, not this one 3D shape, so a flexible achiral molecule counts as
 // the same even when this conformer alone would not overlay its mirror image.
 export function superimposable(mol) {
+  return mirrorID(mol) === mol.getIDCode();
+}
+
+// OCL's canonical code of the mirror image (x reflected; the code reads stereo from the 3D model).
+function mirrorID(mol) {
   const m = mol.getCompactCopy();
   for (let a = 0; a < m.getAllAtoms(); a++) m.setAtomX(a, -m.getAtomX(a));
-  return m.getIDCode() === mol.getIDCode();
+  return m.getIDCode();
 }
+
+// ---- Stereo tab: how two structures are related ----
+// a, b = build3D results. In order: molecular formula; connectivity (canonical code with stereo removed: stripping it on
+// a 3D copy does not work, since the code reads stereo back from the coordinates, so it goes through a copy without
+// them); then stereo, from each 3D model's code and the code of b's mirror image. A meso compound is its own mirror
+// image, so it comes out 'same' against itself. The code ignores conformation, so two shapes of one compound match.
+// Returns { kind: 'not isomers' | 'constitutional' | 'open' | 'same' | 'enantiomers' | 'diastereomers', formulas, open }.
+// 'open': a stereo unit is left open in a or b (open = [a, b]), checked only once the connectivity matches, since
+// constitutional isomers are told apart without stereo (1-butanol and 2-butanol).
+export function relation(OCL, a, b) {
+  const formulas = [a, b].map(x => x.mol.getMolecularFormula().formula);
+  if (formulas[0] !== formulas[1]) return { kind: 'not isomers', formulas };
+  const flat = m => { const c = OCL.Molecule.fromIDCode(m.getIDCode()); c.stripStereoInformation(); return c.getIDCode(); };
+  if (flat(a.mol) !== flat(b.mol)) return { kind: 'constitutional', formulas };
+  const open = [a, b].map(stereoOpen);
+  if (open.some(Boolean)) return { kind: 'open', formulas, open };
+  const id = a.mol.getIDCode();
+  return { kind: id === b.mol.getIDCode() ? 'same' : id === mirrorID(b.mol) ? 'enantiomers' : 'diastereomers', formulas };
+}
+
+// A stereocenter or stereo double bond that the name or SMILES left open (OCL parity 3), from build3D's `given`.
+export const stereoOpen = ({ given }) => given.atoms.includes(3) || Object.values(given.bonds).includes(3);
 
 // ---- Shape tab: Newman projections down C–C bonds, and ring angles ----
 const unit = v => { const n = Math.hypot(...v); return v.map(x => x / n); };

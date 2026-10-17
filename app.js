@@ -9,7 +9,9 @@ const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: 
   chair: -1, flipped: false, cguess: false, ctries: {},
   // Structure-tab views, one at a time: pol (bond dipoles), ar (aromatic ring index), nmr (equivalent H labels);
   // pguess/ppick and nguess/npick: guess-first for polar/nonpolar and for the number of signals
-  pol: false, ar: -1, nmr: false, pguess: false, ppick: null, nguess: false, npick: null };
+  pol: false, ar: -1, nmr: false, pguess: false, ppick: null, nguess: false, npick: null,
+  // Stereo tab: cmp = the compared structure and its relation; side = it is shown beside the model (model 1)
+  cmp: null, side: false };
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -63,9 +65,10 @@ function draw() {
   const g = cur.groups[state.hl], hl = highlight();
   const set = hl ? new Set(hl) : null;
   const shown = a => state.h || a.elem !== 'H';
+  const lit = a => !set || set.has(a.index) || (state.side && a.model === 1); // the compared structure is never dimmed
   viewer.setStyle({}, {});
-  viewer.setStyle({ predicate: a => shown(a) && (!set || set.has(a.index)) }, styleFor(null));
-  if (set) viewer.setStyle({ predicate: a => shown(a) && !set.has(a.index) }, styleFor(tok('--dim')));
+  viewer.setStyle({ predicate: a => shown(a) && lit(a) }, styleFor(null));
+  if (set) viewer.setStyle({ predicate: a => shown(a) && !lit(a) }, styleFor(tok('--dim')));
   if (state.tab === 'structure' && state.atom >= 0) // the tapped atom gets a bigger ball than its neighbors
     viewer.addStyle({ predicate: a => shown(a) && a.index === state.atom }, { sphere: { scale: state.style === 'fill' ? 1.15 : 0.42, colorscheme: 'Jmol' } });
   $('note').textContent = g ? g.info
@@ -84,6 +87,7 @@ function draw() {
   showArom();
   showNMR();
   showCenter();
+  showRel();
   showNewman();
   showChair();
   addLabels();
@@ -632,25 +636,32 @@ function animateView(to, ms = 600, done = null) {
 // Center the view on the stereocenter and turn it so group 4 points straight away from the viewer.
 // With the mirror image on, the mirror is rebuilt for the new view afterwards, so both group 4s point away.
 function lowestToBack(r) {
-  const mirror = state.mirror;
+  const mirror = state.mirror, side = state.side;
   if (mirror) setMirror(false, false);
+  if (side) setSide(false, false);
   const c = atomAt(r.atom), l = atomAt(r.order[3]), v = viewer.getView(), q0 = v.slice(4, 8);
   const d = qRot(q0, unit([l.x - c.x, l.y - c.y, l.z - c.z])); // where group 4 points on screen now
-  animateView([-c.x, -c.y, -c.z, v[3], ...qMul(qArc(d, [0, 0, -1]), q0)], 600, mirror ? () => setMirror(true) : null);
+  animateView([-c.x, -c.y, -c.z, v[3], ...qMul(qArc(d, [0, 0, -1]), q0)], 600, mirror ? () => setMirror(true) : side ? () => setSide(true) : null);
 }
 
 // ---- Mirror image (Stereo tab): a reflected copy (model 1) to the right of the model. It is built from the current
 // view, so the mirror plane stands upright on screen between the two; both then turn together.
+// The screen's right, up and toward-the-viewer directions in model coordinates.
+function screenAxes() {
+  const q = viewer.getView().slice(4, 8), qi = [-q[0], -q[1], -q[2], q[3]];
+  return [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map(v => qRot(qi, v));
+}
+
 function setMirror(on, zoom = true) {
   state.mirror = on;
+  if (on) { state.side = false; $('btn-side').setAttribute('aria-pressed', 'false'); } // the compared structure is model 1 too
   $('btn-mirror').setAttribute('aria-pressed', String(on));
   $('mirror-note').hidden = !on;
   const old = viewer.getModel(1); // 3Dmol returns the last model for a missing id, so check it is really model 1
   if (old?.getID() === 1) viewer.removeModel(old);
   viewer.removeAllShapes();
   if (on) {
-    const q = viewer.getView().slice(4, 8), qi = [-q[0], -q[1], -q[2], q[3]];
-    const [n, up, out] = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map(v => qRot(qi, v)); // screen axes in model coordinates
+    const [n, up, out] = screenAxes();
     const pts = viewer.getModel(0).selectedAtoms({}).map(a => [a.x, a.y, a.z]);
     const c = [0, 1, 2].map(k => pts.reduce((s, p) => s + p[k], 0) / pts.length);
     const along = (p, u) => (p[0] - c[0]) * u[0] + (p[1] - c[1]) * u[1] + (p[2] - c[2]) * u[2];
@@ -670,6 +681,82 @@ function setMirror(on, zoom = true) {
   }
   if (zoom) viewer.zoomTo({}, 400);
   draw();
+}
+
+// ---- Compare two structures (Stereo tab): the relation, and the second structure beside the model as model 1 (never
+// together with the mirror image, which is model 1 as well).
+const REL = {
+  same: ['Same compound', 'the two structures match, stereo included. Two models that differ only by turning about single bonds or by a ring flip (conformations) are the same compound.'],
+  enantiomers: ['Enantiomers', 'mirror images that do not superimpose. Each stereocenter has the opposite configuration (R ↔ S), while double bonds keep E/Z.'],
+  diastereomers: ['Diastereomers', 'stereoisomers (atoms joined the same way) that are not mirror images of each other.'],
+  constitutional: ['Constitutional isomers', f => `the same formula (${formulaHTML(f[0], 0)}), with the atoms joined in a different order.`],
+  'not isomers': ['Not isomers', f => `the formulas differ (${formulaHTML(f[0], 0)} and ${formulaHTML(f[1], 0)}).`],
+};
+let cmpSeq = 0;
+
+function showRel() {
+  const c = state.cmp, box = $('rel');
+  $('cmp-tools').hidden = !c;
+  if (!c) return; // lookup messages stay until a result arrives
+  const r = c.rel, [title, text] = REL[r.kind] || [];
+  const which = r.open ? (r.open[0] && r.open[1] ? 'either structure' : r.open[0] ? `the first structure (${esc(cur.title)})` : `the second structure (${esc(c.title)})`) : '';
+  box.innerHTML = (r.kind === 'open'
+    ? `<p class="facts"><b>Cannot tell</b>: the stereo (R/S, E/Z or cis/trans) of ${which} is not set in the name, so the relationship cannot be told. Add it to the name, as in (R)-2-butanol or cis-2-butene.</p>`
+    : `<p class="facts"><b>${title}</b>: ${typeof text === 'function' ? text(r.formulas) : text}</p>`)
+    + `<p class="small">${state.side ? `Left: ${esc(cur.title)} · Right: ${esc(c.title)}` : `Compared with ${esc(c.title)}`}${c.stripped ? ' (a salt or mixture: only its largest part)' : ''}.</p>`;
+}
+
+// Show the compared structure to the right of the model, as the 3D build made it (not turned to match).
+function setSide(on, zoom = true) {
+  if (on && state.mirror) setMirror(false, false);
+  state.side = on && !!state.cmp;
+  $('btn-side').setAttribute('aria-pressed', String(state.side));
+  const old = viewer.getModel(1); // 3Dmol returns the last model for a missing id, so check it is really model 1
+  if (old?.getID() === 1) viewer.removeModel(old);
+  if (state.side) {
+    const [n] = screenAxes(), dot3 = (p, u) => p[0] * u[0] + p[1] * u[1] + p[2] * u[2];
+    const lines = state.cmp.molfile.split('\n'), count = parseInt(lines[3].slice(0, 3));
+    const mean = P => [0, 1, 2].map(k => P.reduce((t, p) => t + p[k], 0) / P.length);
+    const a = viewer.getModel(0).selectedAtoms({}).map(x => [x.x, x.y, x.z]);
+    const b = lines.slice(4, 4 + count).map(l => l.slice(0, 30).trim().split(/\s+/).map(Number)); // V2000 atom lines: x, y, z first
+    const ca = mean(a), cb = mean(b);
+    const gap = Math.max(...a.map(p => dot3(p, n) - dot3(ca, n))) - Math.min(...b.map(p => dot3(p, n) - dot3(cb, n))) + 2.5;
+    const shift = [0, 1, 2].map(k => ca[k] + gap * n[k] - cb[k]);
+    for (let i = 0; i < count; i++) lines[4 + i] = b[i].map((x, k) => (x + shift[k]).toFixed(4).padStart(10)).join('') + lines[4 + i].slice(30);
+    viewer.addModel(lines.join('\n'), 'sdf', { keepH: true });
+  }
+  if (zoom) viewer.zoomTo({}, 400);
+  draw();
+}
+
+$('cmp-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const name = $('q2').value.trim(), mol = cur, my = ++cmpSeq, box = $('rel');
+  if (!name || !mol) return;
+  $('cmp-go').disabled = true;
+  state.cmp = null; if (state.side) setSide(false, false);
+  box.innerHTML = '<p class="small">Looking up the name…</p>';
+  try {
+    const hit = await resolveName(name);
+    if (my !== cmpSeq || mol !== cur) return; // a newer comparison or molecule took over
+    if (!hit) { box.innerHTML = `<p class="small">No structure found for “${esc(name)}”. Check the spelling, or try the IUPAC name.</p>`; return; }
+    box.innerHTML = '<p class="small">Building the 3D model…</p>';
+    const res = await ask({ compare: hit.smiles });
+    if (res.stale || my !== cmpSeq || mol !== cur) return;
+    if (res.error) { box.innerHTML = `<p class="small err">${esc(res.error)}</p>`; return; }
+    state.cmp = { title: hit.title, ...res.compare };
+    setSide(true);
+  } catch (err) {
+    if (my === cmpSeq) box.innerHTML = `<p class="small err">${esc(err.message || 'The lookup failed. Check the connection and try again.')}</p>`;
+  } finally {
+    if (my === cmpSeq) $('cmp-go').disabled = false;
+  }
+});
+$('btn-side').addEventListener('click', () => setSide(!state.side));
+
+// Leaving the Stereo tab takes its model views away: the mirror image and the compared structure.
+function leaveStereo() {
+  if (state.mirror) setMirror(false); else if (state.side) setSide(false); else draw();
 }
 
 function showTab() {
@@ -720,6 +807,7 @@ async function run(name) {
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })), flips: {} }; // flips[i]: the other chair of chair i, null if none
     state.hl = state.atom = state.st = state.bond = state.ring = state.chair = -1; state.tries = {}; state.stries = {}; state.ctries = {}; state.flipped = state.sliding = false;
     state.ar = -1; state.ppick = state.npick = null;
+    state.cmp = null; state.side = false; cmpSeq++; $('rel').textContent = ''; $('cmp-go').disabled = false; $('btn-side').setAttribute('aria-pressed', 'false');
     morphing++; flipping = -1; // a ring-flip slide or search for the old molecule is over
     if (state.mirror) setMirror(false, false);
     viewer.removeAllModels();
@@ -770,7 +858,7 @@ tabs.forEach((t, i) => {
   t.addEventListener('click', () => {
     const left = state.tab; state.tab = t.dataset.tab; showTab();
     if (left === 'shape' && state.tab !== 'shape' && (state.bond >= 0 || state.flipped)) setBond(-1, true); // a turned model or the other chair is a Shape-tab view
-    else if (state.mirror && state.tab !== 'stereo') setMirror(false); else draw(); // the mirror image is a Stereo-tab view
+    else if (left === 'stereo' && state.tab !== 'stereo') leaveStereo(); else draw();
   });
   t.addEventListener('keydown', e => { // arrow keys move between tabs, as in any tab list
     const d = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
@@ -804,7 +892,7 @@ $('btn-cguess').addEventListener('click', e => {
 $('btn-reset').addEventListener('click', () => {
   if (!home) return;
   anim++; viewer.setView(home);
-  if (state.mirror) setMirror(true); else viewer.render();
+  if (state.mirror) setMirror(true); else if (state.side) setSide(true); else viewer.render();
 });
 $('btn-mirror').addEventListener('click', () => setMirror(!state.mirror));
 $('btn-pol').addEventListener('click', () => setView('pol', !state.pol));

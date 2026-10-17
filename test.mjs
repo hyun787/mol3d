@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH } from './chem.js';
 const dihedralOf = (m, a, b, c, d) => { const p = i => [m.getAtomX(i), m.getAtomY(i), m.getAtomZ(i)], s = (u, v) => u.map((x, k) => x - v[k]), cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
   const b2 = s(p(c), p(b)), n1 = cr(s(p(b), p(a)), b2), n2 = cr(b2, s(p(d), p(c))), x = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2], y = cr(n1, n2).reduce((t, v, k) => t + v * b2[k], 0) / Math.hypot(...b2);
   return Math.atan2(y, x) * 180 / Math.PI; };
@@ -304,6 +304,70 @@ for (const [name, smi] of MIRROR) {
   const got = superimposable(build3D(OCL, smi).mol);
   if (got !== want) fail++;
   console.log(got === want ? 'ok  ' : 'FAIL', 'mirror', name.padEnd(30), got ? 'superimposable' : 'not superimposable', got === want ? '' : '(RDKit disagrees)');
+}
+
+// ---- How two structures are related: textbook answer, and RDKit for the stereo verdicts (canonical isomeric SMILES;
+// the mirror image inverts every @/@@ and keeps / and \). Sugars in the open-chain form, checked by name via RDKit CIP below.
+const SMI = {
+  '(R)-2-butanol': 'C[C@@H](O)CC', '(S)-2-butanol': 'C[C@H](O)CC', '2-butanol': 'CC(O)CC', '1-butanol': 'CCCCO',
+  '(2R,3R)-tartaric acid': '[C@@H]([C@H](C(=O)O)O)(C(=O)O)O', '(2S,3S)-tartaric acid': '[C@H]([C@@H](C(=O)O)O)(C(=O)O)O',
+  'meso-tartaric acid': 'O[C@H](C(=O)O)[C@@H](O)C(=O)O', 'meso-tartaric acid (written the other way)': 'O[C@@H](C(=O)O)[C@H](O)C(=O)O',
+  'cis-2-butene': 'C/C=C\\C', 'trans-2-butene': 'C/C=C/C', '2-butene': 'CC=CC',
+  'D-glucose': 'O=C[C@H](O)[C@@H](O)[C@H](O)[C@H](O)CO', 'D-galactose': 'O=C[C@H](O)[C@@H](O)[C@@H](O)[C@H](O)CO',
+  'L-glucose': 'O=C[C@@H](O)[C@H](O)[C@@H](O)[C@@H](O)CO',
+  'beta-D-glucopyranose': 'C([C@@H]1[C@H]([C@@H]([C@H]([C@@H](O1)O)O)O)O)O', 'beta-D-galactopyranose': 'C([C@@H]1[C@@H]([C@@H]([C@H]([C@@H](O1)O)O)O)O)O',
+  'cis-1,2-dimethylcyclohexane': 'C[C@H]1CCCC[C@H]1C', 'cis-1,2-dimethylcyclohexane (mirror-written)': 'C[C@@H]1CCCC[C@@H]1C',
+  'trans-1,2-dimethylcyclohexane': 'C[C@H]1CCCC[C@@H]1C',
+  butane: 'CCCC', isobutane: 'CC(C)C', '1-propanol': 'CCCO', '2-propanol': 'CC(C)O', ethanol: 'CCO', 'dimethyl ether': 'COC', methanol: 'CO',
+};
+// The sugar SMILES carry the names' configurations (RDKit CIP, atoms by SMILES index).
+for (const [name, want] of [['D-glucose', '2R 4S 6R 8R'], ['D-galactose', '2R 4S 6S 8R'], ['L-glucose', '2S 4R 6S 8S']]) {
+  const rd = RDKit.get_mol(SMI[name]), got = JSON.parse(rd.get_stereo_tags()).CIP_atoms.map(([i, l]) => i + l[1]).join(' ');
+  rd.delete();
+  if (got !== want) { fail++; console.log('FAIL', name, 'SMILES has', got, `(want ${want})`); }
+}
+const RELATION = [
+  ['(R)-2-butanol', '(S)-2-butanol', 'enantiomers'], ['(2R,3R)-tartaric acid', 'meso-tartaric acid', 'diastereomers'],
+  ['meso-tartaric acid', 'meso-tartaric acid (written the other way)', 'same'], ['(2R,3R)-tartaric acid', '(2S,3S)-tartaric acid', 'enantiomers'],
+  ['cis-2-butene', 'trans-2-butene', 'diastereomers'], ['D-glucose', 'D-galactose', 'diastereomers'], ['D-glucose', 'L-glucose', 'enantiomers'],
+  ['beta-D-glucopyranose', 'beta-D-galactopyranose', 'diastereomers'],
+  ['cis-1,2-dimethylcyclohexane', 'trans-1,2-dimethylcyclohexane', 'diastereomers'],
+  ['cis-1,2-dimethylcyclohexane', 'cis-1,2-dimethylcyclohexane (mirror-written)', 'same'], // meso
+  ['butane', 'isobutane', 'constitutional'], ['1-propanol', '2-propanol', 'constitutional'], ['ethanol', 'dimethyl ether', 'constitutional'],
+  ['ethanol', 'methanol', 'not isomers'], ['(R)-2-butanol', '(R)-2-butanol', 'same'],
+  ['2-butanol', '(R)-2-butanol', 'open'], ['cis-2-butene', '2-butene', 'open'], ['1-butanol', '2-butanol', 'constitutional'],
+];
+const rdCan = s => { const m = RDKit.get_mol(s), c = m.get_smiles(); m.delete(); return c; };
+const rdMass = s => { const m = RDKit.get_mol(s), d = JSON.parse(m.get_descriptors()); m.delete(); return d.exactmw.toFixed(4); };
+const rdRelation = (a, b) => {
+  if (rdMass(a) !== rdMass(b)) return 'not isomers';
+  const flat = s => rdCan(s.replace(/[@/\\]/g, ''));
+  if (flat(a) !== flat(b)) return 'constitutional';
+  if ([a, b].some(s => s === SMI['2-butanol'] || s === SMI['2-butene'])) return 'open'; // the structures with open stereo, listed by hand
+  return rdCan(a) === rdCan(b) ? 'same' : rdCan(a) === rdCan(b.replace(/@@?/g, x => (x === '@' ? '@@' : '@'))) ? 'enantiomers' : 'diastereomers';
+};
+for (const [x, y, want] of RELATION) {
+  const got = relation(OCL, build3D(OCL, SMI[x]), build3D(OCL, SMI[y]));
+  const rd = rdRelation(SMI[x], SMI[y]), ok = got.kind === want && rd === want;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'relation', `${x} / ${y}`.padEnd(58), got.kind, ok ? '' : `(want ${want}, RDKit ${rd})`);
+}
+{ // two conformations of one compound: (R)-2-butanol with its C2–C3 bond turned 120°, a rigid turn as on the Shape tab
+  const b = build3D(OCL, SMI['(R)-2-butanol']), other = b.mol.getCompactCopy(), t0 = dihedralOf(b.mol, 0, 1, 3, 4);
+  other.ensureHelperArrays(OCL.Molecule.cHelperNeighbours);
+  const P = i => [other.getAtomX(i), other.getAtomY(i), other.getAtomZ(i)], c = P(3), k = P(3).map((x, j) => x - P(1)[j]), n = Math.hypot(...k);
+  const side = new Set([3]); // atoms beyond C3, away from C2
+  for (const a of side) for (let j = 0; j < other.getAllConnAtoms(a); j++) { const x = other.getConnAtom(a, j); if (x !== 1) side.add(x); }
+  side.delete(3);
+  const th = 2 * Math.PI / 3, u = k.map(x => x / n), cs = Math.cos(th), sn = Math.sin(th);
+  for (const a of side) {
+    const v = P(a).map((x, j) => x - c[j]), w = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]], d = u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    const r = v.map((x, j) => x * cs + w[j] * sn + u[j] * d * (1 - cs) + c[j]);
+    other.setAtomX(a, r[0]); other.setAtomY(a, r[1]); other.setAtomZ(a, r[2]);
+  }
+  const t = dihedralOf(other, 0, 1, 3, 4), got = relation(OCL, b, { mol: other, given: b.given }).kind;
+  if (got !== 'same') { fail++; console.log('FAIL relation: two conformations of (R)-2-butanol should be the same compound, got', got); }
+  else console.log('ok   relation: (R)-2-butanol in two conformations', `C–C–C–C ${t0.toFixed(0)}° and ${t.toFixed(0)}°`, 'same');
 }
 
 // ---- Shape tab: Newman bonds, one per symmetry class: [name, SMILES, 'front-back' bonds (* = anti/gauche references), ranked]

@@ -199,6 +199,16 @@ footer a { color: inherit; }
           <div class="rows" role="group" aria-label="Highlight a stereo unit" id="stereo"></div>
           <p class="small">E/Z uses the CIP priority rules. cis/trans is shown for a C=C with one H on each carbon, and for ring atoms that carry one H and one other group.</p>
         </div>
+        <div class="group">
+          <div class="label">Compare two structures</div>
+          <form class="picker" id="cmp-form">
+            <input id="q2" type="search" placeholder="Second compound" aria-label="Second compound name" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+            <button id="cmp-go" type="submit">Compare</button>
+          </form>
+          <div class="row" id="cmp-tools" hidden><button id="btn-side" aria-pressed="false">Show side by side</button></div>
+          <div id="rel" aria-live="polite"></div>
+          <p class="small">Same formula but atoms joined in a different order: constitutional isomers. Joined the same way but arranged differently in space: stereoisomers, either mirror images (enantiomers) or not (diastereomers). Turning about a single bond (a new conformation) never makes a different compound.</p>
+        </div>
       </div>
 
       <div class="pane" id="pane-shape" role="tabpanel" aria-labelledby="tab-shape" hidden>
