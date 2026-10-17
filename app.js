@@ -1,4 +1,4 @@
-import { GROUPS, KIT_PARTS, IDEAL, conformer } from './chem.js';
+import { GROUPS, KIT_PARTS, IDEAL, conformer, stericPairs } from './chem.js';
 import { resolveName } from './lookup.js';
 
 const $ = id => document.getElementById(id);
@@ -187,6 +187,9 @@ function showNewman() {
   $('phi').value = String(state.phi);
   $('conf').innerHTML = !c.kind ? 'In between: neither staggered nor eclipsed.'
     : `<b>${c.kind === 'staggered' ? 'Staggered' : 'Eclipsed'}</b>` + (c.rel ? ` · ${esc(p)} and ${esc(q)} are <b>${c.rel}</b>` : '');
+  const pairs = stericPairs(b, state.phi).map(([f, k, a]) => `${esc(plain(f))} and ${esc(plain(k))} are <b>${a <= 5 ? 'eclipsed' : Math.abs(a - 60) <= 5 ? 'gauche' : `${a}° apart`}</b>`);
+  const steric = [...new Set(pairs)].map(t => { const n = pairs.filter(x => x === t).length; return n > 1 ? `${t} (×${n})` : t; });
+  $('strain').innerHTML = steric.length ? 'Steric (van der Waals) strain: ' + steric.join('; ') : '';
   // Guess first: the curve stays hidden until the student turns to the form they think is least stable and taps.
   const guessing = state.sguess && b.levels, open = !guessing || state.bond in state.stries, top = b.levels && Math.max(...b.levels);
   $('btn-sguess').hidden = !b.levels;
@@ -271,6 +274,7 @@ const atomAt = (i, m = 0) => viewer.getModel(m).selectedAtoms({ index: i })[0];
 // On the model: R/S beside the selected stereocenter, and 1–4 on its groups.
 function addLabels() {
   viewer.removeAllLabels();
+  drawStrain();
   const r = selCenter();
   if (!r) return;
   const show = revealed(state.st);
@@ -281,6 +285,23 @@ function addLabels() {
       screenOffset: { x: 10, y: 10 }, fontSize: 18, bold: true, fontColor: tok('--bg'), backgroundColor: tok('--accent'), backgroundOpacity: 1, inFront: true });
     r.order.forEach((a, k) => viewer.addLabel(String(k + 1), { position: atomAt(a, m), alignment: 'center', fontSize: 15,
       bold: true, fontColor: tok('--bg'), backgroundColor: tok('--fg'), backgroundOpacity: 1, inFront: true }));
+  }
+}
+
+// Shape tab: a see-through pink rod with a "vdW strain" label between each pair of groups in steric strain.
+// Only these rods are removed here, so the mirror plane (also a shape) is never touched.
+let strainShapes = [];
+function drawStrain() {
+  strainShapes.forEach(s => viewer.removeShape(s));
+  strainShapes = [];
+  const b = state.tab === 'shape' && cur.bonds[state.bond];
+  if (!b) return;
+  for (const [f, k] of stericPairs(b, state.phi)) {
+    const [p, q] = [atomAt(f), atomAt(k)].map(a => ({ x: a.x, y: a.y, z: a.z }));
+    strainShapes.push(viewer.addCylinder({ start: p, end: q, radius: 0.15, color: tok('--cut'), opacity: 0.6 }));
+    // the label sits just above the rod's middle so it does not hide the rod
+    viewer.addLabel('vdW strain', { position: { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, z: (p.z + q.z) / 2 }, alignment: 'bottomCenter', screenOffset: { x: 0, y: 10 },
+      fontSize: 12, bold: true, fontColor: tok('--bg'), backgroundColor: tok('--cut'), backgroundOpacity: 0.85, inFront: true });
   }
 }
 
