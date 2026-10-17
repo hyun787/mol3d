@@ -10,8 +10,9 @@
 
 - [x] 5. 1,3-diaxial: `diaxial()` pairs → pink rods + "1,3-diaxial" labels (drawStrain removes only its own shapes), panel line "Steric strain: 1,3-diaxial interactions between …" (group/group pairs first).
 
+- [x] 6. Guess first (off by default) for the stability verdict: once both chairs are known, pick "Chair as built / Flipped chair / About the same" to open the answer. Hidden when no verdict (halogen, C≡N, unchecked, blocked).
+
 ## Next
-- 6. Guess first for stability.
 - Finish: README, delete this file, merge, deploy check, live check.
 
 ## Blocked / limits found

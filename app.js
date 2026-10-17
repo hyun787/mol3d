@@ -220,6 +220,7 @@ function showChair() {
     + seen.map(t => { const n = pairs.filter(x => x === t).length; return esc(t) + (n > 1 ? ` (×${n})` : ''); }).join('; ') : '';
   const btn = $('btn-flip');
   btn.hidden = !!c.block || f === null;
+  $('btn-cguess').hidden = !!c.block || f === null || !!c.judge; // nothing to guess without a verdict
   btn.disabled = flipping === state.chair;
   btn.setAttribute('aria-pressed', String(state.flipped));
   $('flip-out').textContent = c.block ? NO_FLIP[c.block]
@@ -228,6 +229,7 @@ function showChair() {
     : f ? (state.flipped ? 'Showing the flipped chair: each axial group is now equatorial, and each equatorial group axial.' : 'Showing the chair as built.') : '';
   $('flip-note').textContent = f ? 'The animation slides each atom straight to its new place. A real ring flip passes through half-chair and twist-boat forms.' : '';
   $('stable').innerHTML = f ? stableHTML(c, f) : '';
+  $('stable').querySelectorAll('[data-cpick]').forEach(b => b.addEventListener('click', () => { state.ctries[state.chair] = b.dataset.cpick; draw(); }));
 }
 
 // Which chair is more stable, once both are known. MMFF94s+ is trusted only for groups checked against A-values.
@@ -238,8 +240,11 @@ const NO_VERDICT = {
 };
 function stableHTML(c, f) {
   if (c.judge || f.dE === null) return `<p class="small">${esc(NO_VERDICT[c.judge?.why] || 'No verdict: the energy of the chair as built is missing.')}</p>`;
-  const v = moreStable(f.dE), shown = state.flipped ? 'flipped' : 'built';
-  return `<p class="facts"><b>${v === 'same' ? 'Both chairs are about the same' : v === shown ? 'This chair is more stable' : 'The other chair is more stable'}</b>.</p>`
+  const v = moreStable(f.dE), shown = state.flipped ? 'flipped' : 'built', pick = state.cguess && state.ctries[state.chair];
+  if (state.cguess && !pick) return '<p class="facts">Which chair is more stable? Pick one to see the answer.</p>'
+    + '<div class="row"><button data-cpick="built">Chair as built</button><button data-cpick="flipped">Flipped chair</button><button data-cpick="same">About the same</button></div>';
+  return (pick ? `<p class="facts">${pick === v ? 'Right' : 'Not quite'}: ${v === 'same' ? 'the two chairs are about the same' : `the ${v === 'built' ? 'chair as built' : 'flipped chair'} is more stable`}.</p>` : '')
+    + `<p class="facts"><b>${v === 'same' ? 'Both chairs are about the same' : v === shown ? 'This chair is more stable' : 'The other chair is more stable'}</b>.</p>`
     + '<p class="small">From the MMFF94s+ force field: the lowest energy found for each chair, compared. Less than 1 kJ/mol apart counts as the same. Groups other than H sit better equatorial, where they avoid 1,3-diaxial crowding.</p>';
 }
 
@@ -648,6 +653,11 @@ $('btn-guess').addEventListener('click', e => {
 $('btn-sguess').addEventListener('click', e => {
   state.sguess = !state.sguess; state.stries = {};
   e.currentTarget.setAttribute('aria-pressed', String(state.sguess));
+  draw();
+});
+$('btn-cguess').addEventListener('click', e => {
+  state.cguess = !state.cguess; state.ctries = {};
+  e.currentTarget.setAttribute('aria-pressed', String(state.cguess));
   draw();
 });
 $('btn-reset').addEventListener('click', () => {
