@@ -214,6 +214,10 @@ function showChair() {
   const g = c.subs.filter(s => !s.h), f = cur.flips[state.chair];
   $('axeq').innerHTML = g.length ? `<ul class="angles" aria-label="Axial and equatorial groups">${g.map(s => `<li><span>${esc(plain(s.sub))}</span><b>${s.ax ? 'axial' : 'equatorial'}</b></li>`).join('')}</ul>`
     : '<p class="small">Only H on this ring: each ring carbon holds one axial and one equatorial H.</p>';
+  const isH = a => cur.atoms[a].el === 'H'; // pairs of two groups first: they crowd the most
+  const pairs = diaxial(c).sort((p, q) => isH(p[1]) - isH(q[1])).map(([x, y]) => `${plain(x)} and ${plain(y)}`), seen = [...new Set(pairs)];
+  $('diax').innerHTML = pairs.length ? 'Steric strain: 1,3-diaxial interactions between '
+    + seen.map(t => { const n = pairs.filter(x => x === t).length; return esc(t) + (n > 1 ? ` (×${n})` : ''); }).join('; ') : '';
   const btn = $('btn-flip');
   btn.hidden = !!c.block || f === null;
   btn.disabled = flipping === state.chair;
@@ -416,19 +420,20 @@ function addLabels() {
   }
 }
 
-// Shape tab: a see-through pink rod with a "vdW strain" label between each pair of groups in steric strain.
-// Only these rods are removed here, so the mirror plane (also a shape) is never touched.
+// Shape tab: a see-through pink rod with a label between each pair of groups in steric strain: "vdW strain" on a Newman
+// bond, "1,3-diaxial" on a chair. Only these rods are removed here, so the mirror plane (also a shape) is never touched.
 let strainShapes = [];
 function drawStrain() {
   strainShapes.forEach(s => viewer.removeShape(s));
   strainShapes = [];
-  const b = state.tab === 'shape' && cur.bonds[state.bond];
-  if (!b) return;
-  for (const [f, k] of stericPairs(b, state.phi)) {
+  if (state.tab !== 'shape' || state.sliding) return;
+  const b = cur.bonds[state.bond], c = chairNow();
+  const pairs = b ? stericPairs(b, state.phi).map(([f, k]) => [f, k, 'vdW strain']) : c ? diaxial(c).map(([x, y]) => [x, y, '1,3-diaxial']) : [];
+  for (const [f, k, text] of pairs) {
     const [p, q] = [atomAt(f), atomAt(k)].map(a => ({ x: a.x, y: a.y, z: a.z }));
     strainShapes.push(viewer.addCylinder({ start: p, end: q, radius: 0.15, color: tok('--cut'), opacity: 0.6 }));
     // the label sits just above the rod's middle so it does not hide the rod
-    viewer.addLabel('vdW strain', { position: { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, z: (p.z + q.z) / 2 }, alignment: 'bottomCenter', screenOffset: { x: 0, y: 10 },
+    viewer.addLabel(text, { position: { x: (p.x + q.x) / 2, y: (p.y + q.y) / 2, z: (p.z + q.z) / 2 }, alignment: 'bottomCenter', screenOffset: { x: 0, y: 10 },
       fontSize: 12, bold: true, fontColor: tok('--bg'), backgroundColor: tok('--cut'), backgroundOpacity: 0.85, inFront: true });
   }
 }

@@ -8,8 +8,9 @@
 
 - [x] 4. More stable chair: `moreStable(dE)` (|ΔE| < 1 kJ/mol = same) → "This chair / The other chair is more stable", "Both chairs are about the same". `noVerdict`: halogens, C≡N (MMFF wrong side) and unchecked groups get a reason, no verdict. Tests: `stable …` (10 cases + N-methylpiperidine + 1,1-dimethyl), `A-value …` (judged groups on the equatorial side and in A order CH₃ > NH₂ > OH; left-out groups must still disagree).
 
+- [x] 5. 1,3-diaxial: `diaxial()` pairs → pink rods + "1,3-diaxial" labels (drawStrain removes only its own shapes), panel line "Steric strain: 1,3-diaxial interactions between …" (group/group pairs first).
+
 ## Next
-- 5. 1,3-diaxial rods/labels + panel line (`diaxial()` already in chem.js and tested).
 - 6. Guess first for stability.
 - Finish: README, delete this file, merge, deploy check, live check.
 
