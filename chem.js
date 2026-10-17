@@ -1307,3 +1307,68 @@ export function e2(OCL, mol, atoms, chairList, c, x) {
   const subs = alkenes.filter(Boolean).map(a => a.subst), top = Math.max(...subs), differ = subs.some(n => n < top);
   return { betas, hs, alkenes: alkenes.map(a => a && { ez: a.ez, subst: a.subst, possible: a.possible, beta: a.beta, zaitsev: differ && a.subst === top }) };
 }
+
+// ---- Faces of a double bond: syn and anti addition ----
+// Each C=C between two carbons outside aromatic rings (ring C=C included), one per set of equivalent ones; not an allene
+// carbon or one with another π bond. aromatic = the molecule has an aromatic ring (its C=C are left out).
+export function doubleBonds(OCL, mol) {
+  mol.ensureHelperArrays(OCL.Molecule.cHelperRings);
+  const rows = [], seen = new Set();
+  for (let b = 0; b < mol.getBonds(); b++) {
+    const [p, q] = [mol.getBondAtom(0, b), mol.getBondAtom(1, b)];
+    if (mol.getBondOrder(b) !== 2 || mol.isAromaticBond(b) || mol.getAtomicNo(p) !== 6 || mol.getAtomicNo(q) !== 6 || piBonds(mol, p) !== 1 || piBonds(mol, q) !== 1) continue;
+    const key = [atomKey(mol, p), atomKey(mol, q)].sort().join(' | ');
+    if (!seen.has(key)) { seen.add(key); rows.push({ atoms: [p, q] }); }
+  }
+  let aromatic = false;
+  for (let a = 0; a < mol.getAtoms(); a++) aromatic ||= mol.isAromaticAtom(a);
+  return { rows, aromatic };
+}
+
+// Symmetric additions only (the same atom on both carbons, so no Markovnikov choice): H₂/Pd and OsO₄ (then workup to two
+// OH) add both atoms to one face (syn); Br₂ adds Br⁺ to one face as a bromonium ion and Br⁻ from the other (anti).
+export const REAGENTS = { h2: { z: 1, len: 1.09, syn: true }, oso4: { z: 8, len: 1.43, syn: true }, br2: { z: 35, len: 1.94, syn: false } };
+
+// Two products, the first atom on the top face (+n, the normal of the C=C plane at p) or the bottom one: syn puts both on
+// that face, anti the second on the other. Each is built fresh and moved onto the model. kind: 'none' (one product, no
+// new stereocenter), 'meso', 'same' (one product), 'enantiomers', 'diastereomers'. rs = R/S at the two carbons.
+// Returns { n (molfile frame), products: [two] | null, kind }.
+export function addition(OCL, mol, p, q, reagent) {
+  const R = REAGENTS[reagent], P = pos(mol, p), Q = pos(mol, q), r = nbrs(mol, p).find(a => a !== q);
+  const n = unit(cross(sub(Q, P), sub(pos(mol, r), P))), heavy = Array.from({ length: mol.getAtoms() }, (_, i) => i);
+  const products = (R.syn ? [[1, 1], [-1, -1]] : [[1, -1], [-1, 1]]).map(([s, t]) => {
+    const e = mol.getCompactCopy();
+    for (const [a, sg, A] of [[p, s, P], [q, t, Q]]) {
+      const i = e.addAtom(R.z), v = A.map((x, k) => x + sg * R.len * n[k]);
+      e.setAtomX(i, v[0]); e.setAtomY(i, v[1]); e.setAtomZ(i, v[2]);
+      e.addBond(a, i);
+    }
+    e.ensureHelperArrays(OCL.Molecule.cHelperNeighbours);
+    e.setBondOrder(e.getBond(p, q), 1);
+    // a group on each carbon (the added atom, or another heavy neighbor when H was added) and their dihedral as added
+    const ref = a => { const n = heavyNbrs(e, a).filter(x => x !== p && x !== q); return n.find(x => x >= mol.getAtoms()) ?? n[0]; };
+    const [rp, rq] = [ref(p), ref(q)], as = rp !== undefined && rq !== undefined ? torsion(e, rp, p, q, rq) : 0;
+    const b = rebuild(OCL, e); // the conformer generator writes its coordinates into e, so the dihedral is read before
+    if (!b) return null;
+    // Open chain: turn the product about the new C–C single bond back to that dihedral (syn ~0°, anti ~180°), so each added
+    // atom shows on the face it came from (as formed; turning it further only changes the conformation). Then onto the model.
+    if (!mol.isRingBond(mol.getBond(p, q)) && rp !== undefined && rq !== undefined) {
+      const m = b.mol, side = new Set([q]);
+      for (const a of side) for (const k of nbrs(m, a)) if (k !== p) side.add(k);
+      side.delete(q);
+      const X = Array.from({ length: m.getAllAtoms() }, (_, i) => pos(m, i)), now = torsion(m, rp, p, q, rq);
+      turnAbout(X, p, q, [...side], now - as).forEach(([x, y, z], i) => { m.setAtomX(i, x); m.setAtomY(i, y); m.setAtomZ(i, z); });
+      if (Math.abs(((torsion(m, rp, p, q, rq) - as + 540) % 360) - 180) > 1) turnAbout(X, p, q, [...side], as - now).forEach(([x, y, z], i) => { m.setAtomX(i, x); m.setAtomY(i, y); m.setAtomZ(i, z); });
+    }
+    // onto the model, the added heavy atoms (not H₂'s H) onto where they were put
+    const added = [[p, s, P], [q, t, Q]].map(([a, sg, A]) => [heavyNbrs(b.mol, a).find(x => x >= mol.getAtoms()), A.map((x, k) => x + sg * R.len * n[k])]).filter(([x]) => x !== undefined);
+    placeOn(b.mol, [...heavy, ...added.map(([x]) => x)], [...heavy.map(i => pos(mol, i)), ...added.map(([, v]) => v)]);
+    return b;
+  });
+  const out = { n: [n[0], -n[1], -n[2]], products: null, kind: null };
+  if (products.some(b => !b)) return out;
+  const rel = relation(OCL, products[0], products[1]).kind, centers = cipCenters(OCL, products[0].mol).filter(a => a === p || a === q);
+  out.kind = rel !== 'same' ? rel : !centers.length ? 'none' : isMeso(OCL, products[0].mol) ? 'meso' : 'same';
+  out.products = products.map(b => productOut(b, { rs: rsAt(OCL, b, [p, q]) }));
+  return out;
+}

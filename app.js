@@ -19,7 +19,8 @@ const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: 
   // Reactions tab: rp = principle (-1 none, 0 SN2, 1 SN1, 2 E2, 3 addition), rx = C–X row; xguess/xpicks: guess first, picks by result key
   rp: -1, rx: 0, xguess: false, xpicks: {},
   sn1v: 'cation', // SN1: show the carbocation or the two products
-  rh: -1 }; // E2: the β-H row picked
+  rh: -1, // E2: the β-H row picked
+  rdb: 0, rgt: 'br2' }; // addition: the C=C row and the reagent
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -967,6 +968,7 @@ function rxReq() {
   if (state.rp === 0 && h) return { kind: 'sn2', i: state.rx };
   if (state.rp === 1 && h && sn1Rate(h) !== 'none') return { kind: 'sn1', i: state.rx };
   if (state.rp === 2 && h) return { kind: 'e2', i: state.rx };
+  if (state.rp === 3 && cur.dbl.rows[state.rdb]) return { kind: 'add', i: state.rdb, reagent: state.rgt };
   return null;
 }
 const rxKey = () => { const q = rxReq(); return q && JSON.stringify(q); };
@@ -982,6 +984,8 @@ function rxAtoms() {
     if (p) return [h.c, h.x, r.betas[p.row.beta], ...p.row.hs.map(i => r.hs[i].h)];
     return [h.c, h.x, ...(r?.betas || []).flatMap(b => [b, ...cur.atoms[b].nbrs.filter(k => cur.atoms[k].el === 'H')])];
   }
+  const d = state.rp === 3 && cur.dbl.rows[state.rdb];
+  if (d) return d.atoms.flatMap(a => [a, ...cur.atoms[a].nbrs]);
   return null;
 }
 
@@ -1000,6 +1004,20 @@ async function rxView() {
 
 // Turn the view so model direction u points along screen direction t; returns the new rotation.
 const viewTurn = (u, t) => { const q0 = viewer.getView().slice(4, 8); return qMul(qArc(qRot(q0, u), t), q0); };
+// The rotation that puts model direction `right` along the screen's x and `up` (made perpendicular to it) along y, then
+// tips the top `tilt` degrees toward you.
+function frameTurn(right, up, tilt = 0) {
+  const x = unit(right), d = up[0] * x[0] + up[1] * x[1] + up[2] * x[2], y = unit(up.map((v, k) => v - d * x[k]));
+  const z = [x[1] * y[2] - x[2] * y[1], x[2] * y[0] - x[0] * y[2], x[0] * y[1] - x[1] * y[0]];
+  const [m00, m01, m02] = x, [m10, m11, m12] = y, [m20, m21, m22] = z, tr = m00 + m11 + m22; // rows: model → screen
+  let q;
+  if (tr > 0) { const k = 2 * Math.sqrt(tr + 1); q = [(m21 - m12) / k, (m02 - m20) / k, (m10 - m01) / k, k / 4]; }
+  else if (m00 > m11 && m00 > m22) { const k = 2 * Math.sqrt(1 + m00 - m11 - m22); q = [k / 4, (m01 + m10) / k, (m02 + m20) / k, (m21 - m12) / k]; }
+  else if (m11 > m22) { const k = 2 * Math.sqrt(1 + m11 - m00 - m22); q = [(m01 + m10) / k, k / 4, (m12 + m21) / k, (m02 - m20) / k]; }
+  else { const k = 2 * Math.sqrt(1 + m22 - m00 - m11); q = [(m02 + m20) / k, (m12 + m21) / k, k / 4, (m10 - m01) / k]; }
+  const t = -tilt * Math.PI / 360; // half angle; negative turns the top toward the viewer (+z)
+  return qMul([Math.sin(t), 0, 0, Math.cos(t)], unit(q));
+}
 
 // Put the model back as built, add the intermediate or products beside it, and turn the view for the pick.
 function applyRx(animate = true, slide = animate) {
@@ -1031,11 +1049,23 @@ function applyRx(animate = true, slide = animate) {
     }
     if (p.q.ok && p.q.molfile && e2Open()) models = [p.q.molfile];
   }
+  const d = state.rp === 3 && cur.dbl.rows[state.rdb];
+  if (d) {
+    q = frameTurn(home3d[d.atoms[1]].map((x, k) => x - home3d[d.atoms[0]][k]), addNormal(d), 20); // C=C across, p orbitals up and down
+    if (r?.products && xOpen(rxKey())) models = r.products.map(x => x.molfile);
+  }
   if (animate || !rxQ) rxQ = q; // the turn the models are placed for, kept while the view moves there
   if (shape) { if (slide) morph(home3d, shape); else viewer.getModel(0).selectedAtoms({}).forEach((a, i) => { [a.x, a.y, a.z] = shape[i]; }); }
   rxModels(models, rxQ);
   draw();
   rxFrame(rxQ);
+}
+
+// The normal of a C=C's plane at its first carbon, from the model as built (the same as chem.js addition, in the viewer's frame).
+function addNormal(d) {
+  const [p, q] = d.atoms, r = cur.atoms[p].nbrs.find(a => a !== q), P = home3d[p];
+  const u = home3d[q].map((x, k) => x - P[k]), v = home3d[r].map((x, k) => x - P[k]);
+  return unit([u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]);
 }
 
 // E2: the H rows. H on one β carbon that give the same alkene with the same verdict share a row (a CH₃'s three H).
@@ -1140,6 +1170,17 @@ function drawRx() {
     const anti = p && (!p.q.ring ? true : p.q.now || (p.q.ok && cur.flips[cur.chairs.findIndex(c => c.atoms.includes(h.c) && c.atoms.includes(r.betas[p.row.beta]))]));
     if (anti) rxShapes.push(viewer.addCylinder({ start: xyz3(P3(p.q.h)), end: xyz3(P3(h.x)), radius: 0.06, color: tok('--accent'), opacity: 0.6, dashed: true }));
   }
+  const d = state.rp === 3 && cur.dbl.rows[state.rdb];
+  if (d) { // the π bond's p orbitals on both faces, and where the reagent comes from
+    const n = addNormal(d), [A, B] = d.atoms.map(a => P3(a)), M = A.map((x, k) => (x + B[k]) / 2), at = (o, s) => o.map((x, k) => x + s * n[k]);
+    for (const C of [A, B]) for (const s of [1, -1]) rxShapes.push(viewer.addSphere({ center: xyz3(at(C, 0.85 * s)), radius: 0.5, color: tok('--lobe'), opacity: 0.55 }));
+    const label = { h2: ['H₂ / Pd', 'H₂ / Pd'], oso4: ['OsO₄', 'OsO₄'], br2: ['Br₂', 'Br⁻'] }[state.rgt];
+    [1, -1].forEach((s, i) => {
+      rxShapes.push(viewer.addArrow({ start: xyz3(at(M, 3.4 * s)), end: xyz3(at(M, 1.6 * s)), radius: 0.07, radiusRatio: 2.4, mid: 0.72, color: tok('--accent'), opacity: 0.9 }));
+      rxTag(label[i], at(M, 3.7 * s), '--accent', { x: -20, y: s > 0 ? 6 : -10 });
+    });
+    if (rxShown() && r?.products) r.products.forEach((x, i) => d.atoms.forEach(a => { if (x.rs[a]) rxTag(x.rs[a], P3(a, i + 1)); }));
+  }
 }
 
 // SN1 view: 'cation' (flat ones only), 'products' (once guessed, in guess mode), or null (nothing to show yet).
@@ -1178,15 +1219,26 @@ function buildReact() {
     row.addEventListener('click', () => { state.rx = i; state.rh = -1; rxView(); });
     box.appendChild(row);
   });
+  const dbl = $('rx-dbl');
+  dbl.textContent = '';
+  cur.dbl.rows.forEach((d, i) => {
+    const row = document.createElement('button'), side = a => { const o = cur.atoms[a].nbrs.filter(k => !d.atoms.includes(k)); return [...o.filter(k => cur.atoms[k].el !== 'H'), ...o.filter(k => cur.atoms[k].el === 'H')].map(plain).join(', '); };
+    row.innerHTML = `<span>C=C${cur.rings.some(r => d.atoms.every(a => r.atoms.includes(a))) ? ' in a ring' : ''}</span><span class="sub">${esc(`On its carbons: ${side(d.atoms[0])} | ${side(d.atoms[1])}`)}</span>`;
+    row.dataset.i = String(i);
+    row.addEventListener('click', () => { state.rdb = i; rxView(); });
+    dbl.appendChild(row);
+  });
 }
 
 function showReact() {
   if (state.tab !== 'reactions') return;
   document.querySelectorAll('#rprin button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.rp === state.rp)));
   const cx = state.rp >= 0 && state.rp < 3, out = $('rx-out');
-  $('rx-pick').hidden = !cx || !cur.hal.rows.length;
-  $('rx-pick-label').textContent = 'C–X bond';
+  $('rx-pick').hidden = cx ? !cur.hal.rows.length : state.rp !== 3 || !cur.dbl.rows.length;
+  $('rx-pick-label').textContent = cx ? 'C–X bond' : 'C=C bond';
+  $('rx-rows').hidden = !cx; $('rx-dbl').hidden = cx;
   document.querySelectorAll('#rx-rows button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.rx)));
+  document.querySelectorAll('#rx-dbl button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.rdb)));
   if (state.rp < 0) { out.innerHTML = '<p class="small">Pick a principle to see it on this molecule.</p>'; return; }
   if (cx && !cur.hal.rows.length) {
     out.innerHTML = '<p class="facts">No C–Cl, C–Br or C–I on an sp³ carbon in this molecule.</p>'
@@ -1197,6 +1249,8 @@ function showReact() {
   if (state.rp === 0) out.innerHTML = sn2HTML(h, r, busy);
   if (state.rp === 1) out.innerHTML = sn1HTML(h, r, busy);
   if (state.rp === 2) out.innerHTML = e2HTML(h, r, busy);
+  if (state.rp === 3) out.innerHTML = addHTML(r, busy);
+  out.querySelectorAll('[data-rgt]').forEach(b => b.addEventListener('click', () => { state.rgt = b.dataset.rgt; rxView(); }));
   out.querySelectorAll('[data-rh]').forEach(b => b.addEventListener('click', () => { const i = +b.dataset.rh; state.rh = state.rh === i ? -1 : i; applyRx(true); }));
   out.querySelectorAll('[data-sn1v]').forEach(b => b.addEventListener('click', () => { state.sn1v = b.dataset.sn1v; applyRx(false); }));
   out.querySelectorAll('[data-xpick]').forEach(b => b.addEventListener('click', () => { // a pick can open models (products, the alkene)
@@ -1235,6 +1289,7 @@ const REL_FACES = {
   diastereomers: '<b>Diastereomers</b>: not equal amounts. The rest of the molecule makes the two faces different.',
 };
 // Guess first for a product relationship: the choices that apply, then the verdict.
+const REL_SAID = { same: 'one product', one: 'one product', meso: 'one meso compound', enantiomers: 'a pair of enantiomers', diastereomers: 'a pair of diastereomers' };
 function relGuess(choices) {
   return '<p class="facts">How are the products from the two faces related? Pick one.</p><div class="row">'
     + choices.map(([k, t]) => `<button data-xpick="${k}">${t}</button>`).join('') + '</div>';
@@ -1256,8 +1311,38 @@ function sn1HTML(h, r, busy) {
   if (view === 'cation') s += `<p class="facts">Carbocation, on the right: its three bond angles add to ${c.sum.toFixed(1)}°, so it is flat (360°). Green: the empty p orbital. Arrows: water coming to the top face and to the bottom face.</p>`;
   if (!xOpen(k)) return s + relGuess([['same', 'One product'], ['enantiomers', 'A pair of enantiomers'], ['diastereomers', 'Diastereomers']]);
   if (view === 'products') s += `<p class="facts">Middle: water added to the top face${r.products[0].rs ? ` (${r.products[0].rs})` : ''}. Right: to the bottom face${r.products[1].rs ? ` (${r.products[1].rs})` : ''}.</p>`;
-  return s + (state.xguess ? verdictLine(state.xpicks[k], r.rel, 'see below') : '') + `<p class="facts">${REL_FACES[r.rel] || esc(r.rel)}</p>`
+  return s + (state.xguess ? verdictLine(state.xpicks[k], r.rel, `it is ${REL_SAID[r.rel]}`) : '') + `<p class="facts">${REL_FACES[r.rel] || esc(r.rel)}</p>`
     + '<p class="small">A carbon radical is flat (or nearly) too, so a reaction through a radical at this carbon reaches both faces the same way.</p>';
+}
+
+const ADD_WHY = {
+  h2: '<b>H₂ on Pd: syn.</b> Both H atoms come from the metal surface, so they add to the face of the C=C that lies on the metal.',
+  br2: '<b>Br₂: anti.</b> Br⁺ bonds to one face first as a bromonium ion, which blocks that face, so Br⁻ comes in from the opposite face.',
+  oso4: '<b>OsO₄: syn.</b> Both O atoms add at once from one face, as a cyclic osmate ester; workup turns them into two OH on the same side.',
+};
+const ADD_KIND = {
+  none: '<b>One product</b> (no new stereocenter): both faces give the same compound.',
+  meso: '<b>One meso compound</b>: both faces give the same compound, achiral though it has stereocenters.',
+  same: '<b>One product</b>: both faces give the same compound.',
+  enantiomers: '<b>A pair of enantiomers</b>: racemic, 50:50. The two faces are mirror images, so the reagent reaches each one equally.',
+  diastereomers: '<b>Diastereomers</b>: not equal amounts. The rest of the molecule makes the two faces different.',
+};
+const addAnswer = k => (k === 'none' || k === 'same' ? 'one' : k);
+
+function addHTML(r, busy) {
+  if (!cur.dbl.rows.length) return '<p class="facts">No C=C outside an aromatic ring in this molecule.</p>'
+    + (cur.dbl.aromatic ? '<p class="small">A benzene ring’s C=C bonds do not add H₂, Br₂ or OsO₄ like this: adding would break the aromatic ring.</p>' : '');
+  const d = cur.dbl.rows[state.rdb], rs = x => d.atoms.map(a => x.rs[a]).filter(Boolean).join(', '), k = rxKey();
+  let s = `<div class="row" role="group" aria-label="Reagent">${[['h2', 'H₂, Pd'], ['br2', 'Br₂'], ['oso4', 'OsO₄']].map(([v, t]) => `<button data-rgt="${v}" aria-pressed="${state.rgt === v}">${t}</button>`).join('')}</div>`
+    + `<p class="facts">${ADD_WHY[state.rgt]}</p>`
+    + '<p class="small">Green: the p orbitals of the π bond, above and below the plane of the C=C, where a reagent can reach it from either face. Only additions of the same atom to both carbons are shown; HBr, hydroboration and halohydrins need a Markovnikov choice and are left out here.</p>';
+  if (busy || r === undefined) return s + '<p class="small">Building the products…</p>';
+  if (!r?.products) return s + '<p class="small">The products could not be built in 3D here.</p>';
+  if (!xOpen(k)) return s + relGuess([['one', 'One product'], ['meso', 'One meso compound'], ['enantiomers', 'A pair of enantiomers'], ['diastereomers', 'Diastereomers']]);
+  const [a, b] = r.products, syn = state.rgt !== 'br2';
+  s += `<p class="facts">${syn ? `Middle: both atoms added to the top face${rs(a) ? ` (${rs(a)})` : ''}. Right: both to the bottom face${rs(b) ? ` (${rs(b)})` : ''}.`
+    : `Middle: Br⁺ on the top face, Br⁻ from the bottom${rs(a) ? ` (${rs(a)})` : ''}. Right: the other way round${rs(b) ? ` (${rs(b)})` : ''}.`}</p>`;
+  return s + (state.xguess ? verdictLine(state.xpicks[k], addAnswer(r.kind), `it is ${REL_SAID[addAnswer(r.kind)]}`) : '') + `<p class="facts">${ADD_KIND[r.kind] || esc(r.kind)}</p>`;
 }
 
 const SUBST = ['unsubstituted', 'monosubstituted', 'disubstituted', 'trisubstituted', 'tetrasubstituted'];
@@ -1366,7 +1451,7 @@ async function run(name) {
 
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })), flips: {}, rxr: {} }; // flips[i]: the other chair of chair i, null if none
-    state.rx = 0; state.rh = -1; state.xpicks = {}; rxBusy = null; rxQ = null;
+    state.rx = state.rdb = 0; state.rh = -1; state.xpicks = {}; rxBusy = null; rxQ = null;
     state.hl = state.atom = state.st = state.bond = state.ring = state.chair = -1; state.tries = {}; state.stries = {}; state.ctries = {}; state.flipped = state.sliding = false;
     state.ar = -1; state.ppick = state.npick = null;
     state.plane = false; planeBusy = false; state.rpick = state.fdl = null; state.fpicks = {};

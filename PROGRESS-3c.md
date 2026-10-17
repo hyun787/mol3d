@@ -8,8 +8,10 @@ Working notes for the 3c branch. Deleted when 3c is merged.
 - Group 3, anti-periplanar (E2): β-H rows (H on one β carbon giving the same alkene share a row), open chain: the β side turned rigidly to H–C–C–X 180° (morph, Newman-like view tilted 25°), ring: trans-diaxial by configuration (faces), "ring flip puts X axial" with the Shape tab's flip when available, alkene per H from the anti shape (E/Z read by OCL from 3D), list of alkenes that can form, Zaitsev tag (only when alkenes differ in substitution), note when the Zaitsev alkene cannot form, Hofmann note, guess first (which alkene, or none).
 - Shape tab fix found on the way: flipChair's conformer swaps the two H of some ring CH₂ (same shape, H identity lost); each H is now put back on its own face. test.mjs checks it.
 
+- Group 4, faces of a double bond: C=C rows (not aromatic, not allene; equivalent ones once), reagent H₂/Pd (syn), Br₂ (anti), OsO₄ (syn), p-orbital lobes on both carbons and reagent arrows from the two faces (Br₂ top, Br⁻ bottom), view with the C=C across and the lobes up (frameTurn), two products from the faces built from the model with the atoms added above/below, shown as formed (open chain: turned about the new C–C bond back to the added dihedral, then fit with the added atoms), kind: one product (no new stereocenter) / one meso compound / enantiomers (racemic) / diastereomers, guess first for the relation, no-C=C and aromatic reasons, Markovnikov note.
+
 ## Next
-- Group 4 (faces of C=C), guess-first pass, then README, merge, deploy, live check.
+- Guess-first pass over all four, then README, merge, deploy, live check.
 
 ## Decisions taken (defaults, no user input)
 - E2 rows: a ring bond in a ring that is not a chair in the model gets no verdict (the brief's rule is for chairs).
@@ -23,6 +25,8 @@ Working notes for the 3c branch. Deleted when 3c is merged.
 - ConformerGenerator works on an edited 3D molecule with explicit H: heavy-atom order kept, new H appended, stereo read from the edited coordinates (getIDCode of the edit = of the build).
 - 3Dmol removeModel pops trailing ids, so removing the highest model first lets addModel reuse 1, 2.
 - OCL toIsomericSmiles can write conflicting / and \ when a C=C carbon has a group on each side (Br/C(\c1ccccc1)=C/c1ccccc1); RDKit reads it without E/Z. Products are posted as molfiles, and test.mjs has RDKit read the molfile (stereo from 3D, removeHs) instead of OCL's SMILES.
+- OCL Molecule.fromMolfile reads coordinates back into OCL's frame (y, z negated again); compare against normals in that frame.
+- OCL ConformerGenerator.getOneConformerAsMolecule(mol) writes the conformer's coordinates into the input molecule: read anything from the edit before building.
 - RDKit.js: get_mol(molfile, '{"removeHs":true}') gives the canonical SMILES with stereo from the 3D coordinates.
 - 3Dmol animated zoomTo adds per-step deltas to the view: two at once, or one during our own animateView, overshoot. Instant zoomTo finds the target view; animateView moves there.
 

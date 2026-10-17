@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, isMeso, mirrorPlane, fischer, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH, halides, sn2, sn2Rate, sn1, sn1Rate, e2 } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, isMeso, mirrorPlane, fischer, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH, halides, sn2, sn2Rate, sn1, sn1Rate, e2, doubleBonds, addition } from './chem.js';
 const dihedralOf = (m, a, b, c, d) => { const p = i => [m.getAtomX(i), m.getAtomY(i), m.getAtomZ(i)], s = (u, v) => u.map((x, k) => x - v[k]), cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
   const b2 = s(p(c), p(b)), n1 = cr(s(p(b), p(a)), b2), n2 = cr(b2, s(p(d), p(c))), x = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2], y = cr(n1, n2).reduce((t, v, k) => t + v * b2[k], 0) / Math.hypot(...b2);
   return Math.atan2(y, x) * 180 / Math.PI; };
@@ -928,6 +928,40 @@ for (const [name, smi, want, zaitsev, zOk, xChair] of E2) {
   if (!bad.length) structuredClone(r);
   if (bad.length) fail++;
   console.log(bad.length ? 'FAIL' : 'ok  ', 'E2', name.padEnd(40), r.alkenes.map((a, i) => `${rdMol(molOf(i))}${a.ez ? ` ${a.ez}` : ''}${a.possible ? '' : ' (no anti H)'}${a.zaitsev ? ' Zaitsev' : ''}`).join(', '), `${(performance.now() - t).toFixed(0)}ms`, bad.length ? `(${bad.join('; ')})` : '');
+}
+// Addition to a C=C: [alkene, SMILES, reagent, kind, textbook products]. The products from the two faces must be the
+// textbook ones (RDKit reading the molfiles). The textbook SMILES are checked on their own with RDKit: a pair is
+// (R,R)/(S,S) (same CIP label at both carbons) and mirror images, a meso compound is its own mirror image with R and S.
+const mirrorS = s => s.replace(/@@?/g, x => (x === '@' ? '@@' : '@'));
+const RR = s => [s, mirrorS(s)], BR = 'C[C@@H](Br)[C@@H](C)Br', DIOL = 'C[C@@H](O)[C@@H](C)O', TBR = 'Br[C@H]1CCCC[C@@H]1Br';
+const MESO_BR = 'C[C@@H](Br)[C@H](C)Br', MESO_DIOL = 'C[C@@H](O)[C@H](C)O', CIS_DIOL = 'O[C@H]1CCCC[C@H]1O';
+for (const [s, meso] of [[BR, false], [DIOL, false], [TBR, false], [MESO_BR, true], [MESO_DIOL, true], [CIS_DIOL, true], [SMI['cis-1,2-dimethylcyclohexane'], true]]) {
+  const l = rdCIP(s).CIP_atoms.map(([, x]) => x), self = rdCan(s) === rdCan(mirrorS(s));
+  if (l.length !== 2 || (l[0] === l[1]) === meso || self !== meso) { fail++; console.log('FAIL addition test SMILES', s, l.join(), self ? 'its own mirror image' : 'chiral'); }
+}
+const ADD = [
+  ['cis-2-butene', SMI['cis-2-butene'], 'br2', 'enantiomers', RR(BR)], ['trans-2-butene', SMI['trans-2-butene'], 'br2', 'meso', [MESO_BR]],
+  ['cis-2-butene', SMI['cis-2-butene'], 'oso4', 'meso', [MESO_DIOL]], ['trans-2-butene', SMI['trans-2-butene'], 'oso4', 'enantiomers', RR(DIOL)],
+  ['cyclohexene', 'C1CCC=CC1', 'br2', 'enantiomers', RR(TBR)], ['cyclohexene', 'C1CCC=CC1', 'oso4', 'meso', [CIS_DIOL]],
+  ['1,2-dimethylcyclohexene', 'CC1=C(C)CCCC1', 'h2', 'meso', [SMI['cis-1,2-dimethylcyclohexane']]],
+  ['propene', 'C=CC', 'br2', 'enantiomers', ['C[C@@H](Br)CBr', 'C[C@H](Br)CBr']], ['propene', 'C=CC', 'oso4', 'enantiomers', ['C[C@@H](O)CO', 'C[C@H](O)CO']],
+  ['2-methylpropene', 'C=C(C)C', 'br2', 'none', ['CC(C)(Br)CBr']], ['cis-2-butene', SMI['cis-2-butene'], 'h2', 'none', ['CCCC']],
+];
+for (const [name, smi, rg, kind, want] of ADD) {
+  const { mol } = build3D(OCL, smi), d = doubleBonds(OCL, mol), t = performance.now(), r = d.rows.length === 1 && addition(OCL, mol, ...d.rows[0].atoms, rg), bad = [];
+  if (!r?.products) bad.push(d.rows.length !== 1 ? `${d.rows.length} C=C rows` : 'no products');
+  else {
+    const got = [...new Set(r.products.map(p => rdMol(p.molfile)))].sort(), exp = [...new Set(want.map(rdCan))].sort();
+    if (got.join(' ') !== exp.join(' ')) bad.push(`products ${got.join(' ')} (want ${exp.join(' ')})`);
+    if (r.kind !== kind) bad.push(`kind ${r.kind}`);
+    structuredClone(r);
+  }
+  if (bad.length) fail++;
+  console.log(bad.length ? 'FAIL' : 'ok  ', 'add', `${name} + ${rg}`.padEnd(32), r?.kind ?? '', r?.products ? [...new Set(r.products.map(p => rdMol(p.molfile)))].join(' ') : '', `${(performance.now() - t).toFixed(0)}ms`, bad.length ? `(${bad.join('; ')})` : '');
+}
+for (const [smi, rows, arom] of [['c1ccccc1', 0, true], ['C=Cc1ccccc1', 1, true], ['C=C=C', 0, false], ['C=CC=C', 1, false], ['C=CCC=C', 1, false], ['CC=CCC=C', 2, false]]) {
+  const d = doubleBonds(OCL, build3D(OCL, smi).mol);
+  if (d.rows.length !== rows || d.aromatic !== arom) { fail++; console.log('FAIL C=C rows', smi, d.rows.length, d.aromatic, `(want ${rows}, ${arom})`); }
 }
 // Equivalent C–X bonds are listed once (meso-2,3-dibromobutane: mirror images; 1,2-dibromoethane), different ones apart
 for (const [smi, want] of [['C[C@@H](Br)[C@H](C)Br', 1], ['BrCCBr', 1], ['BrCCCl', 2], ['C[C@@H](Br)[C@@H](C)Br', 1]]) {
