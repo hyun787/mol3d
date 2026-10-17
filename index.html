@@ -91,6 +91,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); min-height: 32px
 #fischer .mp { stroke: var(--accent); stroke-dasharray: 6 5; stroke-width: 1.6; }
 #fischer .tags rect { fill: var(--accent); }
 #fischer .tags text { fill: var(--bg); }
+#fischer .tags rect.q { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+#fischer .tags text.q { fill: var(--accent); }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row button { border: 1px solid var(--line); border-radius: 8px; flex: 1 1 auto; }
 .note { margin: 0; font-size: 0.9rem; min-height: 3.1em; }
@@ -208,7 +210,7 @@ footer a { color: inherit; }
         <div class="group">
           <div class="label">Fischer projection</div>
           <div id="fischer"></div>
-          <div class="row" id="fischer-tools" hidden><button id="btn-fview">Turn to the Fischer view</button></div>
+          <div class="row" id="fischer-tools" hidden><button id="btn-fview">Turn to the Fischer view</button><button id="btn-fguess" aria-pressed="false">Guess first</button></div>
           <div id="fischer-out" aria-live="polite"></div>
           <p class="small">A Fischer projection draws the carbon chain top to bottom with every bond eclipsed. At each cross, the horizontal bonds come toward you and the vertical bonds point back. Turn the drawing 90° in the page and it shows the opposite configuration; 180° keeps it.</p>
         </div>
@@ -218,7 +220,7 @@ footer a { color: inherit; }
             <input id="q2" type="search" placeholder="Second compound" aria-label="Second compound name" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
             <button id="cmp-go" type="submit">Compare</button>
           </form>
-          <div class="row" id="cmp-tools" hidden><button id="btn-side" aria-pressed="false">Show side by side</button></div>
+          <div class="row" id="cmp-tools"><button id="btn-side" aria-pressed="false" hidden>Show side by side</button><button id="btn-rguess" aria-pressed="false">Guess first</button></div>
           <div id="rel" aria-live="polite"></div>
           <p class="small">Same formula but atoms joined in a different order: constitutional isomers. Joined the same way but arranged differently in space: stereoisomers, either mirror images (enantiomers) or not (diastereomers). Turning about a single bond (a new conformation) never makes a different compound.</p>
         </div>

@@ -13,7 +13,9 @@ const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: 
   // Stereo tab: cmp = the compared structure and its relation; side = it is shown beside the model (model 1)
   cmp: null, side: false,
   // plane: the meso mirror plane is shown (cur.mplane: undefined = not looked for yet, null = none on reachable shapes)
-  plane: false };
+  plane: false,
+  // guess first: rguess/rpick for the relation, fguess with fdl (D/L pick) or fpicks[row] (R/S picks) for the Fischer projection
+  rguess: false, rpick: null, fguess: false, fdl: null, fpicks: {} };
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -702,14 +704,21 @@ let cmpSeq = 0;
 
 function showRel() {
   const c = state.cmp, box = $('rel');
-  $('cmp-tools').hidden = !c;
+  $('btn-side').hidden = !c;
   if (!c) return; // lookup messages stay until a result arrives
   const r = c.rel, [title, text] = REL[r.kind] || [];
   const which = r.open ? (r.open[0] && r.open[1] ? 'either structure' : r.open[0] ? `the first structure (${esc(cur.title)})` : `the second structure (${esc(c.title)})`) : '';
-  box.innerHTML = (r.kind === 'open'
+  const tail = `<p class="small">${state.side ? `Left: ${esc(cur.title)} · Right: ${esc(c.title)}` : `Compared with ${esc(c.title)}`}${c.stripped ? ' (a salt or mixture: only its largest part)' : ''}.</p>`;
+  if (state.rguess && !state.rpick && r.kind !== 'open') { // nothing to guess when the stereo is not set
+    box.innerHTML = '<p class="facts">How are the two structures related? Pick one.</p><div class="row">'
+      + Object.entries(REL).map(([k, [t]]) => `<button data-rpick="${k}">${t}</button>`).join('') + '</div>' + tail;
+    box.querySelectorAll('[data-rpick]').forEach(b => b.addEventListener('click', () => { state.rpick = b.dataset.rpick; draw(); }));
+    return;
+  }
+  box.innerHTML = (state.rguess && state.rpick && r.kind !== 'open' ? `<p class="facts">${state.rpick === r.kind ? 'Right' : 'Not quite'}.</p>` : '')
+    + (r.kind === 'open'
     ? `<p class="facts"><b>Cannot tell</b>: the stereo (R/S, E/Z or cis/trans) of ${which} is not set in the name, so the relationship cannot be told. Add it to the name, as in (R)-2-butanol or cis-2-butene.</p>`
-    : `<p class="facts"><b>${title}</b>: ${typeof text === 'function' ? text(r.formulas) : text}</p>`)
-    + `<p class="small">${state.side ? `Left: ${esc(cur.title)} · Right: ${esc(c.title)}` : `Compared with ${esc(c.title)}`}${c.stripped ? ' (a salt or mixture: only its largest part)' : ''}.</p>`;
+    : `<p class="facts"><b>${title}</b>: ${typeof text === 'function' ? text(r.formulas) : text}</p>`) + tail;
 }
 
 // Show the compared structure to the right of the model, as the 3D build made it (not turned to match).
@@ -751,7 +760,7 @@ $('cmp-form').addEventListener('submit', async e => {
     const res = await ask({ compare: hit.smiles });
     if (res.stale || my !== cmpSeq || mol !== cur) return;
     if (res.error) { box.innerHTML = `<p class="small err">${esc(res.error)}</p>`; return; }
-    state.cmp = { title: hit.title, ...res.compare };
+    state.cmp = { title: hit.title, ...res.compare }; state.rpick = null;
     setSide(true);
   } catch (err) {
     if (my === cmpSeq) box.innerHTML = `<p class="small err">${esc(err.message || 'The lookup failed. Check the connection and try again.')}</p>`;
@@ -760,6 +769,11 @@ $('cmp-form').addEventListener('submit', async e => {
   }
 });
 $('btn-side').addEventListener('click', () => setSide(!state.side));
+$('btn-rguess').addEventListener('click', e => {
+  state.rguess = !state.rguess; state.rpick = null;
+  e.currentTarget.setAttribute('aria-pressed', String(state.rguess));
+  draw();
+});
 
 // ---- Fischer projection (Stereo tab): drawn from chem.js fischer() as SVG, with R/S beside each stereocenter.
 const FISCHER_WHY = {
@@ -778,7 +792,7 @@ function leftLabel(t) {
   return r.join('');
 }
 const RH = 46, FP = 24, FX = 122, FW = 300; // row height, padding, the vertical line's x, width
-function fischerSVG(f, show) {
+function fischerSVG(f, tag) {
   const n = f.rows.length, H = 2 * FP + (n - 1) * RH, Y = i => FP + i * RH;
   const text = (x, y, s, anchor = 'middle') => `<text x="${x}" y="${y + 5}" text-anchor="${anchor}">${esc(SUB(s))}</text>`;
   let lines = '', words = '', tags = '';
@@ -788,9 +802,10 @@ function fischerSVG(f, show) {
     if (!r.cross) { words += text(FX, Y(i), r.label); return; }
     lines += `<line x1="${FX - 44}" x2="${FX + 44}" y1="${Y(i)}" y2="${Y(i)}"/>`;
     words += text(FX - 50, Y(i), leftLabel(r.left.label), 'end') + text(FX + 50, Y(i), r.right.label, 'start');
-    if (r.rs && show(i)) tags += `<rect x="${FW - 34}" y="${Y(i) - 12}" width="24" height="24" rx="5"/><text x="${FW - 22}" y="${Y(i) + 5}" text-anchor="middle">${r.rs}</text>`;
+    const t = tag(i), q = t?.q ? ' class="q"' : '';
+    if (t) tags += `<rect${q} x="${FW - 34}" y="${Y(i) - 12}" width="24" height="24" rx="5"/><text${q} x="${FW - 22}" y="${Y(i) + 5}" text-anchor="middle">${esc(t.text)}</text>`;
   });
-  const said = f.rows.map(r => (r.cross ? `${r.left.label} left, ${r.right.label} right${r.rs && show(f.rows.indexOf(r)) ? ` (${r.rs})` : ''}` : r.label)).join('; ');
+  const said = f.rows.map((r, i) => (r.cross ? `${r.left.label} left, ${r.right.label} right${tag(i) && !tag(i).q ? ` (${r.rs})` : ''}` : r.label)).join('; ');
   return `<svg viewBox="0 0 ${FW} ${H}" role="img" aria-label="${esc(`Fischer projection, top to bottom: ${said}`)}">
     <g stroke="var(--fg)" stroke-width="1.6" stroke-linecap="round">${lines}</g>
     <g font-family="var(--sans)" font-size="15" fill="var(--fg)" stroke="var(--bg)" stroke-width="5" paint-order="stroke" stroke-linejoin="round">${words}</g>
@@ -799,18 +814,41 @@ function fischerSVG(f, show) {
 
 function showFischer() {
   const f = cur.fischer, box = $('fischer'), out = $('fischer-out');
-  const one = f.rows ? f.rows.filter(r => r.cross) : [];
-  $('fischer-tools').hidden = one.length !== 1;
+  const crosses = f.rows ? f.rows.flatMap((r, i) => (r.cross ? [i] : [])) : [], named = crosses.filter(i => f.rows[i].rs);
+  $('fischer-tools').hidden = !!f.why;
+  $('btn-fview').hidden = crosses.length !== 1;
+  $('btn-fguess').hidden = !f.dl && !named.length; // nothing to guess
   if (f.why) { box.innerHTML = `<p class="facts">${esc(FISCHER_WHY[f.why])}</p>`; out.textContent = ''; return; }
-  const show = i => !state.guess || revealed(f.rows[i].row);
-  box.innerHTML = fischerSVG(f, show);
+  // Guess first: D/L when the drawing has one (its pick opens R/S too), otherwise R/S at each named center, numbered from the top.
+  const g = state.fguess, dlOpen = !g || !f.dl || !!state.fdl;
+  const tag = i => {
+    const r = f.rows[i];
+    if (!r.rs || (state.guess && !revealed(r.row))) return null; // the stereocenter rows' own guess still hides it
+    if (!g || (f.dl ? state.fdl : state.fpicks[i])) return { text: r.rs };
+    return f.dl ? null : { text: String(named.indexOf(i) + 1), q: true };
+  };
+  box.innerHTML = fischerSVG(f, tag);
   const notes = [];
-  if (f.dl) notes.push(`<p class="facts"><b>${f.dl.dl}</b>-${f.dl.kind === 'sugar' ? 'sugar: the OH on the lowest stereocenter points' : 'amino acid: the NH₂ on the α-carbon points'} ${f.dl.dl === 'D' ? 'right' : 'left'}.</p>`);
+  if (g && f.dl && !state.fdl) notes.push(`<p class="facts">D or L? ${f.dl.kind === 'sugar' ? 'Look at the OH on the lowest stereocenter.' : 'Look at the NH₂ on the α-carbon.'}</p><div class="row"><button data-fdl="D">D</button><button data-fdl="L">L</button></div>`);
+  if (g && f.dl && state.fdl) notes.push(`<p class="facts">${state.fdl === f.dl.dl ? 'Right' : 'Not quite'}: it is ${f.dl.dl}.</p>`);
+  if (g && !f.dl) named.forEach((i, k) => {
+    const pick = state.fpicks[i], rs = f.rows[i].rs;
+    notes.push(pick ? `<p class="facts">Stereocenter ${k + 1}: ${pick === rs ? 'Right' : 'Not quite'}, it is <b>${rs}</b>.</p>`
+      : `<p class="facts">Stereocenter ${k + 1} (counting from the top): R or S?</p><div class="row"><button data-fpick="${i}" data-v="R">R</button><button data-fpick="${i}" data-v="S">S</button></div>`);
+  });
+  if (f.dl && dlOpen) notes.push(`<p class="facts"><b>${f.dl.dl}</b>-${f.dl.kind === 'sugar' ? 'sugar: the OH on the lowest stereocenter points' : 'amino acid: the NH₂ on the α-carbon points'} ${f.dl.dl === 'D' ? 'right' : 'left'}.</p>`);
   if (f.mirror !== null) notes.push('<p class="facts">The top half mirrors the bottom half across the dashed line: a meso compound.</p>');
   if (f.ringLeft) notes.push('<p class="small">Stereocenters in a ring are left out.</p>');
   if (f.open) notes.push('<p class="small">Some stereocenters are not set in the source structure, so this shows the ones the 3D build picked.</p>');
   out.innerHTML = notes.join('');
+  out.querySelectorAll('[data-fdl]').forEach(b => b.addEventListener('click', () => { state.fdl = b.dataset.fdl; draw(); }));
+  out.querySelectorAll('[data-fpick]').forEach(b => b.addEventListener('click', () => { state.fpicks[b.dataset.fpick] = b.dataset.v; draw(); }));
 }
+$('btn-fguess').addEventListener('click', e => {
+  state.fguess = !state.fguess; state.fdl = null; state.fpicks = {};
+  e.currentTarget.setAttribute('aria-pressed', String(state.fguess));
+  draw();
+});
 
 // One stereocenter: turn the model so its chain neighbors point up-and-back and down-and-back and its other two groups
 // come toward the viewer, as the cross draws it. Only the view turns; the coordinates stay.
@@ -954,7 +992,7 @@ async function run(name) {
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })), flips: {} }; // flips[i]: the other chair of chair i, null if none
     state.hl = state.atom = state.st = state.bond = state.ring = state.chair = -1; state.tries = {}; state.stries = {}; state.ctries = {}; state.flipped = state.sliding = false;
     state.ar = -1; state.ppick = state.npick = null;
-    state.plane = false; planeBusy = false;
+    state.plane = false; planeBusy = false; state.rpick = state.fdl = null; state.fpicks = {};
     state.cmp = null; state.side = false; cmpSeq++; $('rel').textContent = ''; $('cmp-go').disabled = false; $('btn-side').setAttribute('aria-pressed', 'false');
     morphing++; flipping = -1; // a ring-flip slide or search for the old molecule is over
     if (state.mirror) setMirror(false, false);

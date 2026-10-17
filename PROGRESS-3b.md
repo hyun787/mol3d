@@ -6,7 +6,7 @@
 - 3. Fischer projection: `fischer()` in chem.js (longest chain of non-ring carbons holding every chain stereocenter; more-oxidized end on top, then IUPAC-style locants; left/right from det(U − c, D − c, A − c) on the 3D model; pure alkyl tails written as one label; D/L for open-chain sugars by the lowest center and for α-amino acids by the α-carbon; meso drawings get a dashed mirror line). SVG in app.js with R/S tags; "Turn to the Fischer view" for one center (view only). Tests: textbook layouts, R/S read off the drawing = chem.js R/S, same drawing for another conformation.
 
 ## Next
-- 4. Guess first (relation, Fischer). Then README, merge, deploy, live check.
+- README, merge, deploy, live check (names through OPSIN/PubChem on the real site).
 
 ## Decisions
 - Open stereo ("not set in the name") is checked only once the connectivity matches: constitutional isomers and non-isomers are told without stereo (1-butanol vs 2-butanol → constitutional isomers).
