@@ -454,6 +454,36 @@ for (const [name, smi, want, dl, meso = false] of FISCHER) {
   structuredClone(fischer(OCL, b.mol, stereo(OCL, b.mol, b.given))); // the worker posts it
 }
 
+// ---- The same checks on the SMILES the site gets for these names (OPSIN, or PubChem where OPSIN fails), as returned on
+// 17 Oct 2026: written differently from the ones above, so this also checks that nothing depends on how a SMILES is written.
+const LIVE = {
+  '(R)-2-butanol': 'C[C@H](CC)O', '(S)-2-butanol': 'C[C@@H](CC)O', '(2R,3R)-tartaric acid': '[C@@H]([C@H](C(=O)O)O)(C(=O)O)O',
+  '(2S,3S)-tartaric acid': '[C@H]([C@@H](C(=O)O)O)(C(=O)O)O', 'meso-tartaric acid': '[C@@H]([C@@H](C(=O)O)O)(C(=O)O)O',
+  'cis-2-butene': 'C\\C=C/C', 'trans-2-butene': 'C\\C=C\\C', 'D-glucose': 'O=C[C@H](O)[C@@H](O)[C@H](O)[C@H](O)CO',
+  'D-galactose': 'O=C[C@H](O)[C@@H](O)[C@@H](O)[C@H](O)CO', 'L-glucose': 'O=C[C@@H](O)[C@H](O)[C@@H](O)[C@@H](O)CO',
+  'cis-1,2-dimethylcyclohexane': 'C[C@H]1[C@H](CCCC1)C', 'trans-1,2-dimethylcyclohexane': 'C[C@H]1[C@@H](CCCC1)C',
+  butane: 'CCCC', isobutane: 'CC(C)C', '1-propanol': 'C(CC)O', '2-propanol': 'CC(C)O', ethanol: 'C(C)O', 'dimethyl ether': 'COC', methanol: 'CO',
+  'D-glyceraldehyde': 'O=C[C@H](O)CO', 'L-alanine': 'N[C@@H](C)C(=O)O', 'meso-2,3-dibromobutane': 'C[C@H]([C@H](C)Br)Br',
+  'meso-2,4-pentanediol': 'C[C@H](C[C@H](C)O)O', 'cis-1,2-dimethylcyclopropane': 'C[C@H]1[C@H](C1)C', 'cis-1,3-dimethylcyclohexane': 'C[C@@H]1C[C@@H](CCC1)C',
+};
+for (const [x, y, want] of RELATION.filter(([x, y]) => LIVE[x] && LIVE[y])) {
+  const got = relation(OCL, build3D(OCL, LIVE[x]), build3D(OCL, LIVE[y])).kind;
+  if (got !== want) fail++;
+  console.log(got === want ? 'ok  ' : 'FAIL', 'live relation', `${x} / ${y}`.padEnd(56), got, got === want ? '' : `(want ${want})`);
+}
+for (const [name, want] of [['meso-tartaric acid', true], ['meso-2,3-dibromobutane', true], ['meso-2,4-pentanediol', true], ['cis-1,2-dimethylcyclopropane', true],
+  ['cis-1,3-dimethylcyclohexane', true], ['(2R,3R)-tartaric acid', false], ['(R)-2-butanol', false]]) {
+  const got = !!mirrorPlane(OCL, build3D(OCL, LIVE[name]).mol);
+  if (got !== want) fail++;
+  console.log(got === want ? 'ok  ' : 'FAIL', 'live meso plane', name.padEnd(30), got ? 'plane' : 'no plane');
+}
+for (const [name, smi, want, dl] of FISCHER.filter(([n]) => LIVE[n])) {
+  const { mol, given } = build3D(OCL, LIVE[name]), f = fischer(OCL, mol, stereo(OCL, mol, given)), got = fRows(f);
+  const ok = (got === want || turned180(got) === want) && (f.dl?.dl || '') === dl;
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'live fischer', name.padEnd(30), got, f.dl ? `[${f.dl.dl}]` : '', ok ? '' : `(want ${want} ${dl})`);
+}
+
 // ---- Shape tab: Newman bonds, one per symmetry class: [name, SMILES, 'front-back' bonds (* = anti/gauche references), ranked]
 const NEWMAN = [
   ['ethane', 'CC', '0-1', true], ['propane', 'CCC', '0-1', true], ['butane', 'CCCC', '0-1 1-2*', true],
