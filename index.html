@@ -12,7 +12,7 @@
 /* Same layout and tokens as the "molecule drawer" viewer: search on top, one stage beside a narrow control column; stacks on phones. */
 :root {
   --bg: #f5f6f2; --fg: #1c201b; --muted: #5b6358; --line: #d9ddd3;
-  --stage: #e6e9e2; --dim: #c2c8bd; --accent: #8f6400; --accent-soft: #f1e3bf; --cut: #c2255c;
+  --stage: #e6e9e2; --dim: #c2c8bd; --accent: #8f6400; --accent-soft: #f1e3bf; --cut: #c2255c; --dipole: #1d5fbf; --lobe: #2f8f6b;
   --sans: "IBM Plex Sans", system-ui, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
   color-scheme: light;
@@ -20,12 +20,12 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #121411; --fg: #e8ebe4; --muted: #9ba393; --line: #2b3028;
-    --stage: #1a1d18; --dim: #3a4136; --accent: #e3b640; --accent-soft: #3a3016; --cut: #f06595; color-scheme: dark;
+    --stage: #1a1d18; --dim: #3a4136; --accent: #e3b640; --accent-soft: #3a3016; --cut: #f06595; --dipole: #6aa8ff; --lobe: #5fd3a5; color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #121411; --fg: #e8ebe4; --muted: #9ba393; --line: #2b3028;
-  --stage: #1a1d18; --dim: #3a4136; --accent: #e3b640; --accent-soft: #3a3016; --cut: #f06595; color-scheme: dark;
+  --stage: #1a1d18; --dim: #3a4136; --accent: #e3b640; --accent-soft: #3a3016; --cut: #f06595; --dipole: #6aa8ff; --lobe: #5fd3a5; color-scheme: dark;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -92,6 +92,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); min-height: 32px
 .note { margin: 0; font-size: 0.9rem; min-height: 3.1em; }
 .legend { display: flex; flex-wrap: wrap; gap: 10px 14px; font-family: var(--mono); font-size: 0.82rem; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; margin-right: 6px; }
+.guess { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.guess input { font: inherit; font-size: 16px; width: 5em; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; min-height: 40px; }
+.guess button { border: 1px solid var(--line); border-radius: 8px; }
 .legend i { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--line); display: inline-block; }
 footer { font-size: 0.78rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; display: grid; gap: 4px; overflow-wrap: anywhere; }
 footer a { color: inherit; }
@@ -148,6 +152,24 @@ footer a { color: inherit; }
         <div class="group">
           <div class="label">Atom</div>
           <div id="atom" aria-live="polite"></div>
+        </div>
+        <div class="group">
+          <div class="label">Polarity</div>
+          <div class="row"><button id="btn-pol" aria-pressed="false">Show bond dipoles</button><button id="btn-pguess" aria-pressed="false">Guess first</button></div>
+          <div id="pol" aria-live="polite"></div>
+          <p class="small">Each blue arrow points along a polar bond from δ+ to δ− (Pauling electronegativity difference 0.4 or more). Their vector sum on this 3D model decides polar or nonpolar, and the gold arrow shows its direction. This is the textbook sketch: lone pairs are left out and there are no numbers. The shape matters too: 1,2-dichloroethane is nonpolar anti but polar gauche.</p>
+        </div>
+        <div class="group">
+          <div class="label">Aromatic rings</div>
+          <div class="rows" role="group" aria-label="Show the p orbitals of a ring" id="arom"></div>
+          <div id="arom-detail" aria-live="polite"></div>
+          <p class="small">Tap a ring to see the p orbital on each ring atom, standing up from the ring plane. Each atom adds π electrons: 1 for a double bond, 2 for a lone pair in its p orbital (pyrrole N–H, furan O), 0 for a lone pair that lies in the ring plane (pyridine N). A flat ring of p orbitals with 4n + 2 π electrons (2, 6, 10 …) is aromatic (Hückel's rule).</p>
+        </div>
+        <div class="group">
+          <div class="label">Equivalent H (¹H NMR)</div>
+          <div class="row"><button id="btn-nmr" aria-pressed="false">Label equivalent H</button><button id="btn-nguess" aria-pressed="false">Guess first</button></div>
+          <div id="nmr" aria-live="polite"></div>
+          <p class="small">H atoms with the same letter are chemically equivalent and give one signal. The test: swap one H for D. Swaps that give the same compound, or its mirror image (enantiotopic H), are equivalent; swaps that give diastereomers (diastereotopic H) are not. Fast motions such as CH₃ rotation and chair flips average out. O–H and N–H signals can look different in a real spectrum because those H exchange.</p>
         </div>
       </div>
 

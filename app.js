@@ -1,4 +1,4 @@
-import { GROUPS, KIT_PARTS, IDEAL, conformer, stericPairs, diaxial, moreStable } from './chem.js';
+import { GROUPS, KIT_PARTS, IDEAL, conformer, stericPairs, diaxial, moreStable, huckel } from './chem.js';
 import { resolveName } from './lookup.js';
 
 const $ = id => document.getElementById(id);
@@ -6,7 +6,10 @@ const empty = $('empty'), q = $('q');
 // guess: the guess-first mode; tries[i] = { pick: 'R' | 'S', hint: true } for stereo row i in that mode
 // chair: selected chair row; flipped: the other chair is shown; cguess/ctries: guess-first for which chair is more stable
 const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: -1, guess: false, tries: {}, mirror: false, bond: -1, phi: 0, sguess: false, stries: {}, ring: -1,
-  chair: -1, flipped: false, cguess: false, ctries: {} };
+  chair: -1, flipped: false, cguess: false, ctries: {},
+  // Structure-tab views, one at a time: pol (bond dipoles), ar (aromatic ring index), nmr (equivalent H labels);
+  // pguess/ppick and nguess/npick: guess-first for polar/nonpolar and for the number of signals
+  pol: false, ar: -1, nmr: false, pguess: false, ppick: null, nguess: false, npick: null };
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -40,7 +43,7 @@ function styleFor(color) {
 
 // Atoms to keep in color for the open tab; everything else is dimmed.
 function highlight() {
-  if (state.tab === 'structure') return state.atom >= 0 ? [state.atom, ...cur.atoms[state.atom].nbrs] : cur.groups[state.hl]?.atoms;
+  if (state.tab === 'structure') return state.atom >= 0 ? [state.atom, ...cur.atoms[state.atom].nbrs] : state.ar >= 0 ? cur.arom.rings[state.ar].atoms : cur.groups[state.hl]?.atoms;
   if (state.tab === 'stereo') return cur.stereo[state.st]?.atoms;
   if (state.tab === 'shape') {
     const b = cur.bonds[state.bond], c = chairNow();
@@ -73,7 +76,13 @@ function draw() {
   document.querySelectorAll('#bonds button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.bond)));
   document.querySelectorAll('#rings button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.ring)));
   document.querySelectorAll('#chairs button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.chair)));
+  document.querySelectorAll('#arom button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.i === state.ar)));
+  $('btn-pol').setAttribute('aria-pressed', String(state.pol));
+  $('btn-nmr').setAttribute('aria-pressed', String(state.nmr));
   showAtom();
+  showPolarity();
+  showArom();
+  showNMR();
   showCenter();
   showNewman();
   showChair();
@@ -103,6 +112,130 @@ function showAtom() {
       + '<p class="small">Angles measured on this 3D model. Lone pairs, rings and crowding push real angles away from the ideal.</p>';
   }
   box.innerHTML = html;
+}
+
+// ---- Structure tab: polarity, aromatic rings, equivalent H. One of the three views is on at a time.
+function setView(k, v) {
+  state.pol = state.nmr = false; state.ar = -1;
+  state[k] = v;
+  if (k === 'ar' && v >= 0) state.hl = state.atom = -1; // the ring takes the highlight
+  draw();
+}
+
+const NO_POLARITY = {
+  ion: 'No verdict: this is an ion. An ion has a net charge, so polar or nonpolar does not apply in the usual way.',
+  element: 'No verdict: this molecule has I, S, P or another element for which the electronegativity difference misleads (C–I and C–S bonds are polar in practice). Arrows show only bonds with a difference of 0.4 or more.',
+};
+function showPolarity() {
+  const p = cur.pol, box = $('pol');
+  $('btn-pguess').hidden = p.polar === null || !p.bonds.length;
+  if (p.polar === null) { box.innerHTML = `<p class="small">${esc(NO_POLARITY[p.why])}</p>`; return; }
+  if (!p.bonds.length) { box.innerHTML = '<p class="facts"><b>Nonpolar</b>: no bond here has an electronegativity difference of 0.4 or more.</p>'; return; }
+  if (state.pguess && !state.ppick) {
+    box.innerHTML = '<p class="facts">Polar or nonpolar? Look at the bond dipoles, then pick one.</p>'
+      + '<div class="row"><button data-ppick="polar">Polar</button><button data-ppick="nonpolar">Nonpolar</button></div>';
+    box.querySelectorAll('[data-ppick]').forEach(b => b.addEventListener('click', () => { state.ppick = b.dataset.ppick; setView('pol', true); }));
+    return;
+  }
+  const v = p.polar ? 'polar' : 'nonpolar';
+  box.innerHTML = (state.pguess ? `<p class="facts">${state.ppick === v ? 'Right' : 'Not quite'}: it is ${v}.</p>` : '')
+    + (p.polar ? '<p class="facts"><b>Polar</b>: the bond dipoles do not cancel. The gold arrow points toward the δ− end of the molecule.</p>'
+      : '<p class="facts"><b>Nonpolar</b>: the polar bonds point in directions that cancel.</p>');
+}
+
+const PI_WHY = {
+  double: p => (p.planar ? 'double bond; its lone pair lies in the ring plane' : 'double bond'),
+  lp: () => 'lone pair in the p orbital',
+  empty: () => 'empty p orbital',
+};
+const piLine = pi => { const n = huckel(pi); return `${pi} π electrons · ${n === null ? 'not 4n + 2' : `4n + 2 with n = ${n}`}`; };
+
+function buildArom() {
+  const box = $('arom'), { rings, systems } = cur.arom;
+  box.textContent = '';
+  rings.forEach((r, i) => {
+    const row = document.createElement('button'), sys = systems[r.system], het = [...new Set(r.atoms.map(a => cur.atoms[a].el).filter(e => e !== 'C'))];
+    const fused = sys.rings.length > 1;
+    row.innerHTML = `<span>${esc(`${r.atoms.length}-membered ring${het.length ? ` (${het.join(', ')})` : ''}: ${fused ? `${r.pi} π electrons` : piLine(r.pi)}`)}</span>`
+      + (fused ? `<span class="sub">${esc(`Fused ring system of ${sys.rings.length} rings: ${sys.pi === null ? 'π electrons not counted' : piLine(sys.pi)}`)}</span>` : '');
+    row.dataset.i = String(i);
+    row.addEventListener('click', () => { setView('ar', state.ar === i ? -1 : i); if (state.ar === i) alignChair(r); }); // ring seen edge-on: lobes above and below
+    box.appendChild(row);
+  });
+  if (!rings.length) box.innerHTML = '<p class="small">No aromatic ring in this molecule.</p>';
+}
+
+function showArom() {
+  const r = cur.arom.rings[state.ar], box = $('arom-detail');
+  if (!r) { box.textContent = ''; return; }
+  const name = a => { const h = cur.atoms[a].nbrs.filter(x => cur.atoms[x].el === 'H').length; return cur.atoms[a].el + (h ? `–H` : ''); };
+  box.innerHTML = `<ul class="angles" aria-label="π electrons from each ring atom">${r.parts.map((p, k) => `<li><span>${k + 1} · ${esc(name(p.atom))}: ${esc(PI_WHY[p.why](p))}</span><b>${p.e}</b></li>`).join('')}</ul>`
+    + `<p class="facts">Total: <b>${r.pi}</b> π electrons in this ring.</p>`;
+}
+
+// Letter and color for equivalence class c: the letter is the main mark, since 8 colors repeat after h.
+const NMR_COLORS = ['#1d4ed8', '#b91c1c', '#15803d', '#7e22ce', '#c2410c', '#0f766e', '#a21caf', '#4d7c0f'];
+const letter = c => (c < 26 ? String.fromCharCode(97 + c) : String.fromCharCode(97 + Math.floor(c / 26) - 1) + String.fromCharCode(97 + c % 26));
+
+function showNMR() {
+  const { h, cls } = cur.nmr, box = $('nmr'), n = new Set(cls).size;
+  $('btn-nguess').hidden = !h.length;
+  if (!h.length) { box.innerHTML = '<p class="small">No H atoms in this molecule.</p>'; return; }
+  if (state.nguess && state.npick === null) {
+    box.innerHTML = '<div class="guess"><label class="facts" for="npick">How many ¹H NMR signals?</label><input id="npick" type="number" min="1" max="99" inputmode="numeric"><button id="btn-ncheck">Check</button></div>';
+    const check = () => { const v = parseInt($('npick').value, 10); if (v > 0) { state.npick = v; setView('nmr', true); } };
+    $('btn-ncheck').addEventListener('click', check);
+    $('npick').addEventListener('keydown', e => { if (e.key === 'Enter') check(); });
+    return;
+  }
+  const rows = [...new Set(cls)].map(c => {
+    const hs = h.filter((_, i) => cls[i] === c), on = [...new Set(hs.map(a => plain(cur.atoms[a].nbrs[0])))];
+    return `<li><span><i class="swatch" style="background:${NMR_COLORS[c % 8]}"></i>${letter(c)}</span><b>${hs.length} H on ${esc(on.join(', '))}</b></li>`;
+  });
+  box.innerHTML = (state.nguess ? `<p class="facts">${state.npick === n ? 'Right' : 'Not quite'}: ${n === 1 ? 'there is 1 signal' : `there are ${n} signals`}.</p>` : '')
+    + `<p class="facts"><b>${n} signal${n === 1 ? '' : 's'}</b> (sets of equivalent H)</p>`
+    + `<ul class="angles" aria-label="Sets of equivalent H">${rows.join('')}</ul>`
+    + (state.h ? '' : '<p class="small">H atoms are hidden: turn on Show H to see the letters.</p>');
+}
+
+// On the model (Structure tab only): dipole arrows, p-orbital lobes, or H letters. Only these shapes are removed here.
+let structShapes = [];
+function drawStructure() {
+  structShapes.forEach(x => viewer.removeShape(x));
+  structShapes = [];
+  if (state.tab !== 'structure' || !cur) return;
+  const P = a => { const t = atomAt(a); return [t.x, t.y, t.z]; }, xyz = v => ({ x: v[0], y: v[1], z: v[2] });
+  if (state.pol && cur.pol.bonds.length) {
+    const all = home3d, c = [0, 1, 2].map(k => all.reduce((s, v) => s + v[k], 0) / all.length);
+    for (const [p, q] of cur.pol.bonds.filter(([x, y]) => state.h || (cur.atoms[x].el !== 'H' && cur.atoms[y].el !== 'H'))) {
+      const a = P(p), b = P(q), d = unit(b.map((x, k) => x - a[k])), m = a.map((x, k) => (x + b[k]) / 2);
+      // shift the arrow 0.35 Å off the bond, away from the molecule's center, so the stick does not hide it
+      let off = m.map((x, k) => x - c[k]);
+      off = off.map((x, k) => x - d[k] * (off[0] * d[0] + off[1] * d[1] + off[2] * d[2]));
+      if (Math.hypot(...off) < 1e-3) off = Math.abs(d[2]) < 0.9 ? [d[1], -d[0], 0] : [0, d[2], -d[1]];
+      off = unit(off).map(x => x * 0.35);
+      const len = Math.hypot(...b.map((x, k) => x - a[k]));
+      structShapes.push(viewer.addArrow({ start: xyz(a.map((x, k) => x + off[k] + d[k] * len * 0.15)), end: xyz(b.map((x, k) => x + off[k] - d[k] * len * 0.15)),
+        radius: 0.06, radiusRatio: 2.2, mid: 0.7, color: tok('--dipole'), opacity: 0.75 }));
+    }
+    const net = cur.pol.net, open = !state.pguess || state.ppick;
+    if (cur.pol.polar && open) {
+      const d = unit(net);
+      structShapes.push(viewer.addArrow({ start: xyz(c.map((x, k) => x - d[k] * 1.2)), end: xyz(c.map((x, k) => x + d[k] * 1.8)),
+        radius: 0.12, radiusRatio: 2, mid: 0.75, color: tok('--accent'), opacity: 0.85 }));
+    }
+  }
+  const r = cur.arom.rings[state.ar];
+  if (r) {
+    const { n } = ringFrame(r.atoms.map(P));
+    for (const a of r.atoms) for (const s of [1, -1]) // one see-through lobe above and one below the ring plane
+      structShapes.push(viewer.addSphere({ center: xyz(P(a).map((x, k) => x + s * 0.75 * n[k])), radius: 0.5, color: tok('--lobe'), opacity: 0.6 }));
+  }
+  if (state.nmr && state.h && (!state.nguess || state.npick !== null)) {
+    const { h, cls } = cur.nmr;
+    h.forEach((a, i) => viewer.addLabel(letter(cls[i]), { position: atomAt(a), alignment: 'center', fontSize: 13, bold: true,
+      fontColor: '#ffffff', backgroundColor: NMR_COLORS[cls[i] % 8], backgroundOpacity: 0.95, inFront: true }));
+  }
 }
 
 function buildKit() {
@@ -186,15 +319,21 @@ function setChair(i) {
   if (i >= 0) alignChair(cur.chairs[i]);
 }
 
-// Look at the chair from the side and a little above, as textbooks draw it: the ring's axis (normal) points up the
+// Look at the chair (or any ring) from the side and a little above, as textbooks draw it: the ring's axis (normal) points up the
 // screen, tilted 20° toward the viewer, so axial bonds run up and down and equatorial bonds fan out.
 function alignChair(c) {
-  const p = c.atoms.map(i => home3d[i]), ctr = [0, 1, 2].map(k => p.reduce((s, v) => s + v[k], 0) / 6);
-  let n = [0, 0, 0];
-  p.forEach((v, i) => { const a = v.map((x, k) => x - ctr[k]), b = p[(i + 1) % 6].map((x, k) => x - ctr[k]);
-    n = n.map((x, k) => x + [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]][k]); });
+  const { ctr, n } = ringFrame(c.atoms.map(i => home3d[i]));
   const v = viewer.getView(), q0 = v.slice(4, 8), t = 20 * Math.PI / 180;
   animateView([-ctr[0], -ctr[1], -ctr[2], v[3], ...qMul(qArc(qRot(q0, unit(n)), [0, Math.cos(t), Math.sin(t)]), q0)]);
+}
+
+// Center and unit normal of a ring from its atom positions, in ring order (Newell: sum of cross products).
+function ringFrame(p) {
+  const ctr = [0, 1, 2].map(k => p.reduce((s, v) => s + v[k], 0) / p.length);
+  let n = [0, 0, 0];
+  p.forEach((v, i) => { const a = v.map((x, k) => x - ctr[k]), b = p[(i + 1) % p.length].map((x, k) => x - ctr[k]);
+    n = n.map((x, k) => x + [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]][k]); });
+  return { ctr, n: unit(n) };
 }
 
 // Why a chair does not flip here (chem.js flipBlock).
@@ -409,6 +548,7 @@ const atomAt = (i, m = 0) => viewer.getModel(m).selectedAtoms({ index: i })[0];
 function addLabels() {
   viewer.removeAllLabels();
   drawStrain();
+  drawStructure();
   const c = !state.sliding && chairNow(); // Shape tab: ax/eq beside each group (not H) on the selected chair
   if (c) for (const s of c.subs.filter(x => !x.h)) viewer.addLabel(s.ax ? 'ax' : 'eq', { position: atomAt(s.sub), alignment: 'bottomLeft',
     screenOffset: { x: 6, y: 6 }, fontSize: 12, bold: true, fontColor: tok('--bg'), backgroundColor: tok(s.ax ? '--accent' : '--fg'), backgroundOpacity: 1, inFront: true });
@@ -548,7 +688,7 @@ function buildChips() {
     const b = document.createElement('button');
     b.textContent = g.name + (g.count > 1 ? ` ×${g.count}` : '');
     b.dataset.i = String(k - 1);
-    b.addEventListener('click', () => { state.hl = k - 1; state.atom = -1; draw(); });
+    b.addEventListener('click', () => { state.hl = k - 1; state.atom = -1; state.ar = -1; draw(); });
     box.appendChild(b);
   });
 }
@@ -579,6 +719,7 @@ async function run(name) {
     const info = Object.fromEntries(GROUPS.map(g => [g.id, g]));
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })), flips: {} }; // flips[i]: the other chair of chair i, null if none
     state.hl = state.atom = state.st = state.bond = state.ring = state.chair = -1; state.tries = {}; state.stries = {}; state.ctries = {}; state.flipped = state.sliding = false;
+    state.ar = -1; state.ppick = state.npick = null;
     morphing++; flipping = -1; // a ring-flip slide or search for the old molecule is over
     if (state.mirror) setMirror(false, false);
     viewer.removeAllModels();
@@ -587,7 +728,7 @@ async function run(name) {
     viewer.setClickable({}, true, atom => { // tapping an atom only means something on the Structure tab
       if (state.tab !== 'structure') return;
       state.atom = state.atom === atom.index ? -1 : atom.index;
-      state.hl = -1;
+      state.hl = -1; state.ar = -1;
       draw();
     });
     empty.hidden = true; $('panel').hidden = false; $('foot').hidden = false;
@@ -602,7 +743,7 @@ async function run(name) {
     $('f-note').textContent = '3D model built in your browser (OpenChemLib, MMFF94s+). It shows one low-energy shape; real molecules move between many.'
       + (res.stripped ? ' This is a salt or mixture, so only the largest part is shown.' : '')
       + (res.minimized ? '' : ' The force field does not cover every atom here, so bond lengths are approximate.');
-    buildChips(); buildKit(); buildStereo(); buildShape();
+    buildChips(); buildKit(); buildStereo(); buildShape(); buildArom();
     viewer.resize(); viewer.zoomTo(); draw(); home = viewer.getView(); // resize: the stage may have changed size since the viewer was made
   } catch (e) {
     showEmpty(`<span class="err">${esc(e.message || 'The lookup failed. Check the connection and try again.')}</span>`);
@@ -666,6 +807,19 @@ $('btn-reset').addEventListener('click', () => {
   if (state.mirror) setMirror(true); else viewer.render();
 });
 $('btn-mirror').addEventListener('click', () => setMirror(!state.mirror));
+$('btn-pol').addEventListener('click', () => setView('pol', !state.pol));
+$('btn-nmr').addEventListener('click', () => setView('nmr', !state.nmr));
+$('btn-pguess').addEventListener('click', e => {
+  state.pguess = !state.pguess; state.ppick = null;
+  e.currentTarget.setAttribute('aria-pressed', String(state.pguess));
+  draw();
+});
+$('btn-nguess').addEventListener('click', e => {
+  state.nguess = !state.nguess; state.npick = null;
+  e.currentTarget.setAttribute('aria-pressed', String(state.nguess));
+  if (state.nguess) state.nmr = false; // the letters would give the count away
+  draw();
+});
 const setPhi = phi => { state.phi = phi; turn(cur.bonds[state.bond]); draw(); };
 $('phi').addEventListener('input', e => setPhi(+e.target.value));
 $('curve').addEventListener('click', e => { // tap the curve: turn to that angle (5° steps, 360° = 0°)
