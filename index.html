@@ -87,6 +87,12 @@ button[aria-pressed="true"], button[aria-selected="true"] { background: var(--ac
 button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 input[type="range"] { width: 100%; accent-color: var(--accent); min-height: 32px; }
 #curve svg { display: block; width: 100%; height: auto; cursor: pointer; }
+#fischer svg { display: block; width: 100%; max-width: 300px; height: auto; margin: 0 auto; }
+#fischer .mp { stroke: var(--accent); stroke-dasharray: 6 5; stroke-width: 1.6; }
+#fischer .tags rect { fill: var(--accent); }
+#fischer .tags text { fill: var(--bg); }
+#fischer .tags rect.q { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+#fischer .tags text.q { fill: var(--accent); }
 .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .row button { border: 1px solid var(--line); border-radius: 8px; flex: 1 1 auto; }
 .note { margin: 0; font-size: 0.9rem; min-height: 3.1em; }
@@ -188,8 +194,10 @@ footer a { color: inherit; }
           <div class="row" id="center-tools" hidden>
             <button id="btn-guess" aria-pressed="false">Guess first</button>
             <button id="btn-mirror" aria-pressed="false">Mirror image</button>
+            <button id="btn-plane" aria-pressed="false" hidden>Mirror plane</button>
           </div>
           <p class="facts" id="mirror-note" hidden></p>
+          <p class="facts" id="plane-note" aria-live="polite" hidden></p>
           <div class="rows" role="group" aria-label="Highlight a stereocenter" id="centers"></div>
           <div id="center-detail" aria-live="polite"></div>
           <p class="small">R/S uses the CIP priority rules. Point group 4 away from you: 1 → 2 → 3 clockwise is R, counterclockwise is S.</p>
@@ -198,6 +206,23 @@ footer a { color: inherit; }
           <div class="label">Double bonds and rings</div>
           <div class="rows" role="group" aria-label="Highlight a stereo unit" id="stereo"></div>
           <p class="small">E/Z uses the CIP priority rules. cis/trans is shown for a C=C with one H on each carbon, and for ring atoms that carry one H and one other group.</p>
+        </div>
+        <div class="group">
+          <div class="label">Fischer projection</div>
+          <div id="fischer"></div>
+          <div class="row" id="fischer-tools" hidden><button id="btn-fview">Turn to the Fischer view</button><button id="btn-fguess" aria-pressed="false">Guess first</button></div>
+          <div id="fischer-out" aria-live="polite"></div>
+          <p class="small">A Fischer projection draws the carbon chain top to bottom with every bond eclipsed. At each cross, the horizontal bonds come toward you and the vertical bonds point back. Turn the drawing 90° in the page and it shows the opposite configuration; 180° keeps it.</p>
+        </div>
+        <div class="group">
+          <div class="label">Compare two structures</div>
+          <form class="picker" id="cmp-form">
+            <input id="q2" type="search" placeholder="Second compound" aria-label="Second compound name" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="go">
+            <button id="cmp-go" type="submit">Compare</button>
+          </form>
+          <div class="row" id="cmp-tools"><button id="btn-side" aria-pressed="false" hidden>Show side by side</button><button id="btn-rguess" aria-pressed="false">Guess first</button></div>
+          <div id="rel" aria-live="polite"></div>
+          <p class="small">Same formula but atoms joined in a different order: constitutional isomers. Joined the same way but arranged differently in space: stereoisomers, either mirror images (enantiomers) or not (diastereomers). Turning about a single bond (a new conformation) never makes a different compound.</p>
         </div>
       </div>
 
