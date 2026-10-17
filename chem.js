@@ -395,6 +395,149 @@ export function relation(OCL, a, b) {
 // A stereocenter or stereo double bond that the name or SMILES left open (OCL parity 3), from build3D's `given`.
 export const stereoOpen = ({ given }) => given.atoms.includes(3) || Object.values(given.bonds).includes(3);
 
+// ---- Stereo tab: the mirror plane of a meso compound ----
+// Stereocenters for meso: OCL's CIP centers, without pseudoasymmetric (r/s) ones, which sit on the plane.
+export function cipCenters(OCL, mol) {
+  mol.ensureHelperArrays(OCL.Molecule.cHelperCIP);
+  const out = [];
+  for (let a = 0; a < mol.getAtoms(); a++) if ([1, 2].includes(mol.getAtomCIPParity(a)) && !mol.isAtomParityPseudo(a)) out.push(a);
+  return out;
+}
+
+// Meso: it matches its mirror image and has two or more stereocenters (cis-1,4-dimethylcyclohexane has none: achiral, not meso).
+export const isMeso = (OCL, mol) => superimposable(mol) && cipCenters(OCL, mol).length >= 2;
+
+// The substitution test on every atom: mark atom a with an isotope; a reflection that takes a to b makes "a marked" the
+// mirror image of "b marked". partners[a] = every such b (all three H of a CH₃, since the code ignores conformation).
+const MASS_NO = { 1: 1, 6: 12, 7: 14, 8: 16, 9: 19, 15: 31, 16: 32, 17: 35, 35: 79, 53: 127 };
+function mirrorPartners(mol) {
+  const n = mol.getAllAtoms(), key = [], mkey = [];
+  for (let a = 0; a < n; a++) {
+    const m = mol.getCompactCopy(), z = mol.getAtomicNo(a);
+    m.setAtomMass(a, (MASS_NO[z] || 2 * z) + 1);
+    key.push(m.getIDCode());
+    for (let i = 0; i < n; i++) m.setAtomX(i, -m.getAtomX(i));
+    mkey.push(m.getIDCode());
+  }
+  return mkey.map(k => key.flatMap((x, b) => (x === k ? [b] : [])));
+}
+
+const reflect = (p, c, n) => { const d = 2 * dot(sub(p, c), n); return p.map((x, k) => x - d * n[k]); };
+const turnAbout = (P, from, to, atoms, deg) => { // positions with `atoms` turned by deg about the from → to bond
+  const u = unit(sub(P[to], P[from])), th = deg * Math.PI / 180, c = Math.cos(th), s = Math.sin(th), o = P[to], Q = P.slice();
+  for (const a of atoms) { const v = sub(P[a], o), k = cross(u, v), d = dot(u, v); Q[a] = v.map((x, i) => x * c + k[i] * s + u[i] * d * (1 - c) + o[i]); }
+  return Q;
+};
+
+// How well the perpendicular bisector plane of atoms s and t reflects `atoms` onto their partners: the worst distance,
+// the sum of squares, and whether each atom got its own partner.
+function planeFit(P, part, s, t, atoms) {
+  const c = P[s].map((x, k) => (x + P[t][k]) / 2), n = unit(sub(P[t], P[s])), used = new Set();
+  let worst = 0, sum = 0;
+  for (const a of atoms) {
+    const r = reflect(P[a], c, n);
+    let best = Infinity, b = -1;
+    for (const j of part[a]) { const d = Math.hypot(...sub(P[j], r)); if (d < best) { best = d; b = j; } }
+    worst = Math.max(worst, best); sum += best * best; used.add(b);
+  }
+  return { worst, sum, c, n, oneToOne: used.size === atoms.length };
+}
+
+// Turn single bonds outside rings until the plane between s and t fits, starting from positions P. The inner bonds of
+// the chain from s to t (not its first or last bond, which only move side groups) go first, together on a 5° grid,
+// scored on the chain atoms; then each other bond in turn over 0–355° in 5° steps and ±4° in 1° steps, heavy atoms
+// first, then all atoms. Each bond turns its side away from s and t where it can, so the plane stays put.
+// shortcut: three or more inner chain bonds are turned one at a time, which can miss; fine for the textbook meso set.
+function turnToPlane(mol, P, part, s, t) {
+  const side = (x, y) => { const S = new Set([x]); for (const a of S) for (const k of nbrs(mol, a)) if (!(a === x && k === y)) S.add(k); return S; };
+  const bonds = [];
+  for (let b = 0; b < mol.getAllBonds(); b++) {
+    const [p, q] = [mol.getBondAtom(0, b), mol.getBondAtom(1, b)];
+    if (mol.getBondOrder(b) !== 1 || mol.isRingBond(b) || mol.getAllConnAtoms(p) < 2 || mol.getAllConnAtoms(q) < 2) continue;
+    const A = side(q, p), B = side(p, q), bad = S => [s, t].some(x => S.has(x) && x !== p && x !== q);
+    const [from, to, S] = !bad(A) && (bad(B) || A.size <= B.size) ? [p, q, A] : !bad(B) ? [q, p, B] : A.size <= B.size ? [p, q, A] : [q, p, B];
+    bonds.push({ from, to, atoms: [...S].filter(x => x !== to) });
+  }
+  const prev = { [s]: -1 }, queue = [s]; // shortest path from s to t
+  for (const a of queue) for (const k of nbrs(mol, a)) if (!(k in prev)) { prev[k] = a; queue.push(k); }
+  const path = []; for (let x = t; x !== -1; x = prev[x]) path.push(x);
+  const onPath = new Set(path), inner = bonds.filter(({ from, to }) => onPath.has(from) && onPath.has(to) && ![s, t].includes(from) && ![s, t].includes(to));
+  if (inner.length && inner.length <= 2) {
+    let best = { e: Infinity, P };
+    const grid = (Q, k) => {
+      if (k === inner.length) { const e = planeFit(Q, part, s, t, path).sum; if (e < best.e) best = { e, P: Q }; return; }
+      for (let d = 0; d < 360; d += 5) grid(turnAbout(Q, inner[k].from, inner[k].to, inner[k].atoms, d), k + 1);
+    };
+    grid(P, 0);
+    P = best.P;
+  }
+  const all = [...P.keys()], heavy = all.filter(a => mol.getAtomicNo(a) !== 1);
+  const rest = inner.length <= 2 ? bonds.filter(b => !inner.includes(b)) : bonds;
+  for (const atoms of [heavy, heavy, all, all, all, all]) for (const { from, to, atoms: S } of rest) {
+    const score = d => planeFit(turnAbout(P, from, to, S, d), part, s, t, atoms).sum;
+    let best = { e: score(0), d: 0 };
+    for (let d = 5; d < 360; d += 5) { const e = score(d); if (e < best.e - 1e-9) best = { e, d }; }
+    for (let d = best.d - 4; d <= best.d + 4; d++) { const e = score(d); if (e < best.e - 1e-9) best = { e, d }; }
+    if (best.d) P = turnAbout(P, from, to, S, best.d);
+  }
+  return P;
+}
+
+// Rigid move of positions P onto Q (least squares over all atoms; Horn's quaternion method, power iteration).
+function fitOnto(P, Q) {
+  const mean = X => [0, 1, 2].map(k => X.reduce((t, p) => t + p[k], 0) / X.length), cp = mean(P), cq = mean(Q);
+  const S = [0, 1, 2].map(i => [0, 1, 2].map(j => P.reduce((t, p, a) => t + (p[i] - cp[i]) * (Q[a][j] - cq[j]), 0)));
+  const [[xx, xy, xz], [yx, yy, yz], [zx, zy, zz]] = S;
+  const N = [[xx + yy + zz, yz - zy, zx - xz, xy - yx], [yz - zy, xx - yy - zz, xy + yx, zx + xz],
+    [zx - xz, xy + yx, -xx + yy - zz, yz + zy], [xy - yx, zx + xz, yz + zy, -xx - yy + zz]];
+  const shift = N.flat().reduce((t, v) => t + Math.abs(v), 0) + 1; // makes the largest eigenvalue the dominant one
+  let q = [1, 0.1, 0.1, 0.1];
+  for (let it = 0; it < 500; it++) q = unit(N.map((row, i) => row.reduce((t, v, j) => t + v * q[j], 0) + shift * q[i]));
+  const [w, ...u] = q;
+  return P.map(p => { const v = sub(p, cp), c1 = cross(u, v), c2 = cross(u, c1); return v.map((x, k) => x + 2 * w * c1[k] + 2 * c2[k] + cq[k]); });
+}
+
+// The mirror plane of a meso compound, checked on real coordinates: each atom, reflected through the plane, lands within
+// 0.3 Å of a partner atom, one partner each, and no two atoms three or more bonds apart come closer than 1.5 Å.
+// The plane swaps stereocenters (R ↔ S), so it is the perpendicular bisector of such a pair. Tried in order: the model
+// as built ('model'); the model turned about single bonds ('turned', as on the Shape tab); conformers from OCL's
+// generator (seeds 1–`seeds`, MMFF94s+, converged runs only, same stereo), turned the same way and moved onto the model
+// ('conformer'). Rings never turn, so a ring keeps its shape: no chair of cis-1,2-dimethylcyclohexane has the plane.
+// Returns { xyz, c, n, how, worst } or null.
+export function mirrorPlane(OCL, mol, seeds = 20) {
+  if (!isMeso(OCL, mol)) return null;
+  const part = mirrorPartners(mol), centers = cipCenters(OCL, mol), all = Array.from({ length: mol.getAllAtoms() }, (_, a) => a);
+  const pairs = centers.flatMap(s => part[s].filter(t => t > s && centers.includes(t)).map(t => [s, t]));
+  const apart = all.map(a => { const near = new Set([a, ...nbrs(mol, a)]); for (const x of nbrs(mol, a)) for (const y of nbrs(mol, x)) near.add(y); return near; });
+  const roomy = P => all.every(a => all.every(b => b <= a || apart[a].has(b) || Math.hypot(...sub(P[a], P[b])) >= 1.5));
+  const check = P => {
+    for (const [s, t] of pairs) {
+      const f = planeFit(P, part, s, t, all);
+      if (f.worst <= 0.3 && f.oneToOne && roomy(P)) return { xyz: P, c: f.c, n: f.n, worst: f.worst };
+    }
+    return null;
+  };
+  const try3 = (P, how) => {
+    const now = check(P);
+    if (now) return { ...now, how };
+    for (const [s, t] of pairs) { const r = check(turnToPlane(mol, P, part, s, t)); if (r) return { ...r, how: how === 'model' ? 'turned' : how }; }
+    return null;
+  };
+  const home = all.map(a => pos(mol, a)), id = mol.getIDCode();
+  const found = try3(home, 'model');
+  if (found) return found;
+  for (let seed = 1; seed <= seeds; seed++) {
+    const m = new OCL.ConformerGenerator(seed).getOneConformerAsMolecule(mol.getCompactCopy());
+    if (!m) continue;
+    m.ensureHelperArrays(OCL.Molecule.cHelperNeighbours);
+    try { if (new OCL.ForceFieldMMFF94(m, 'MMFF94s+').minimise() !== 0) continue; } catch { continue; }
+    if (m.getIDCode() !== id) continue;
+    const r = try3(fitOnto(all.map(a => pos(m, a)), home), 'conformer');
+    if (r) { const f = fitOnto(r.xyz, home), g = check(f); if (g) return { ...g, how: 'conformer' }; } // move the found shape onto the model, then check again
+  }
+  return null;
+}
+
 // ---- Shape tab: Newman projections down C–C bonds, and ring angles ----
 const unit = v => { const n = Math.hypot(...v); return v.map(x => x / n); };
 

@@ -1,7 +1,7 @@
 // Self-check: `npm install && node test.mjs`. Builds each molecule in 3D and checks the functional groups found.
 import OCL from 'openchemlib';
 import initRDKit from '@rdkit/rdkit';
-import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, cipOrder, superimposable, relation, isMeso, mirrorPlane, newmanBonds, conformer, ringAngles, stericPairs, chairs, diaxial, flipChair, moreStable, polarity, aromaticRings, huckel, equivalentH } from './chem.js';
 const dihedralOf = (m, a, b, c, d) => { const p = i => [m.getAtomX(i), m.getAtomY(i), m.getAtomZ(i)], s = (u, v) => u.map((x, k) => x - v[k]), cr = (u, v) => [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
   const b2 = s(p(c), p(b)), n1 = cr(s(p(b), p(a)), b2), n2 = cr(b2, s(p(d), p(c))), x = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2], y = cr(n1, n2).reduce((t, v, k) => t + v * b2[k], 0) / Math.hypot(...b2);
   return Math.atan2(y, x) * 180 / Math.PI; };
@@ -369,6 +369,47 @@ for (const [x, y, want] of RELATION) {
   if (got !== 'same') { fail++; console.log('FAIL relation: two conformations of (R)-2-butanol should be the same compound, got', got); }
   else console.log('ok   relation: (R)-2-butanol in two conformations', `C–C–C–C ${t0.toFixed(0)}° and ${t.toFixed(0)}°`, 'same');
 }
+
+// ---- Meso mirror plane: [name, SMILES, 'plane' | 'none' (meso, but no plane on reachable shapes) | 'not meso']
+// A found plane is checked on its own: reflecting every atom through it gives the same set of positions (each atom onto
+// a different atom of its element, within 0.3 Å); bonds keep their model lengths; the stereo of the shape is the
+// model's; and the plane has a stereocenter on each side.
+const MESO = [
+  ['meso-tartaric acid', SMI['meso-tartaric acid'], 'plane'], ['meso-2,3-dibromobutane', 'C[C@@H](Br)[C@H](C)Br', 'plane'],
+  ['meso-2,4-pentanediol', 'C[C@@H](O)C[C@H](C)O', 'plane'], ['cis-1,2-dimethylcyclopropane', 'C[C@H]1C[C@H]1C', 'plane'],
+  ['cis-1,3-dimethylcyclohexane', 'C[C@@H]1CCC[C@H](C)C1', 'plane'], ['ribaric acid (plane through the r/s center)', 'O[C@H](C(=O)O)[C@H](O)[C@@H](O)C(=O)O', 'plane'],
+  ['meso-2,5-hexanediol', 'C[C@@H](O)CC[C@H](C)O', 'plane'],
+  ['cis-1,2-dimethylcyclohexane (chairs are chiral)', SMI['cis-1,2-dimethylcyclohexane'], 'none'],
+  ['(2R,3R)-tartaric acid', SMI['(2R,3R)-tartaric acid'], 'not meso'], ['(R)-2-butanol', SMI['(R)-2-butanol'], 'not meso'],
+  ['cis-1,4-dimethylcyclohexane (no stereocenter)', 'C[C@H]1CC[C@@H](C)CC1', 'not meso'],
+];
+for (const [name, smi, want] of MESO) {
+  const { mol } = build3D(OCL, smi), t = performance.now(), meso = isMeso(OCL, mol), r = mirrorPlane(OCL, mol), ms = (performance.now() - t).toFixed(0);
+  const got = !meso ? 'not meso' : r ? 'plane' : 'none';
+  let ok = got === want, why = '';
+  if (r) {
+    const n = mol.getAllAtoms(), el = a => mol.getAtomicNo(a), P = r.xyz, used = new Set();
+    for (let a = 0; a < n; a++) {
+      const d = 2 * ((P[a][0] - r.c[0]) * r.n[0] + (P[a][1] - r.c[1]) * r.n[1] + (P[a][2] - r.c[2]) * r.n[2]), q = P[a].map((x, k) => x - d * r.n[k]);
+      const b = [...Array(n).keys()].filter(j => el(j) === el(a)).sort((i, j) => Math.hypot(...P[i].map((x, k) => x - q[k])) - Math.hypot(...P[j].map((x, k) => x - q[k])))[0];
+      if (Math.hypot(...P[b].map((x, k) => x - q[k])) > 0.3) why ||= `atom ${a} reflects onto nothing`;
+      used.add(b);
+    }
+    if (used.size !== n) why ||= 'two atoms reflect onto one';
+    const len = (X, b) => Math.hypot(...X[mol.getBondAtom(0, b)].map((x, k) => x - X[mol.getBondAtom(1, b)][k]));
+    const home = [...Array(n).keys()].map(a => [mol.getAtomX(a), mol.getAtomY(a), mol.getAtomZ(a)]);
+    for (let b = 0; b < mol.getAllBonds(); b++) if (Math.abs(len(P, b) - len(home, b)) > (r.how === 'conformer' ? 0.05 : 0.001)) why ||= `bond ${b} length changed`;
+    const m = mol.getCompactCopy(); P.forEach(([x, y, z], a) => { m.setAtomX(a, x); m.setAtomY(a, y); m.setAtomZ(a, z); });
+    if (m.getIDCode() !== mol.getIDCode()) why ||= 'stereo changed';
+    m.ensureHelperArrays(OCL.Molecule.cHelperCIP);
+    const sides = []; for (let a = 0; a < mol.getAtoms(); a++) if ([1, 2].includes(m.getAtomCIPParity(a)) && !m.isAtomParityPseudo(a)) sides.push(Math.sign((P[a][0] - r.c[0]) * r.n[0] + (P[a][1] - r.c[1]) * r.n[1] + (P[a][2] - r.c[2]) * r.n[2]));
+    if (!sides.includes(1) || !sides.includes(-1)) why ||= 'stereocenters not on both sides';
+    ok &&= !why;
+  }
+  if (!ok) fail++;
+  console.log(ok ? 'ok  ' : 'FAIL', 'meso plane', name.padEnd(46), got, r ? `(${r.how}, worst ${r.worst.toFixed(2)} Å)` : '', `${ms}ms`, ok ? '' : `(want ${want}${why ? `; ${why}` : ''})`);
+}
+{ const m = build3D(OCL, 'C[C@@H]1CCC[C@H](C)C1').mol; structuredClone(mirrorPlane(OCL, m)); } // the worker posts it
 
 // ---- Shape tab: Newman bonds, one per symmetry class: [name, SMILES, 'front-back' bonds (* = anti/gauche references), ranked]
 const NEWMAN = [

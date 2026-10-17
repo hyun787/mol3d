@@ -11,7 +11,9 @@ const state = { style: 'ball', h: true, tab: 'structure', hl: -1, atom: -1, st: 
   // pguess/ppick and nguess/npick: guess-first for polar/nonpolar and for the number of signals
   pol: false, ar: -1, nmr: false, pguess: false, ppick: null, nguess: false, npick: null,
   // Stereo tab: cmp = the compared structure and its relation; side = it is shown beside the model (model 1)
-  cmp: null, side: false };
+  cmp: null, side: false,
+  // plane: the meso mirror plane is shown (cur.mplane: undefined = not looked for yet, null = none on reachable shapes)
+  plane: false };
 let cur = null, home = null, home3d = [], token = 0, seq = 0; // home3d: atom positions as the 3D build made them
 
 const showEmpty = html => { empty.innerHTML = html; empty.hidden = false; };
@@ -87,6 +89,7 @@ function draw() {
   showArom();
   showNMR();
   showCenter();
+  showPlane();
   showRel();
   showNewman();
   showChair();
@@ -553,6 +556,7 @@ function addLabels() {
   viewer.removeAllLabels();
   drawStrain();
   drawStructure();
+  drawPlane();
   const c = !state.sliding && chairNow(); // Shape tab: ax/eq beside each group (not H) on the selected chair
   if (c) for (const s of c.subs.filter(x => !x.h)) viewer.addLabel(s.ax ? 'ax' : 'eq', { position: atomAt(s.sub), alignment: 'bottomLeft',
     screenOffset: { x: 6, y: 6 }, fontSize: 12, bold: true, fontColor: tok('--bg'), backgroundColor: tok(s.ax ? '--accent' : '--fg'), backgroundOpacity: 1, inFront: true });
@@ -653,6 +657,7 @@ function screenAxes() {
 }
 
 function setMirror(on, zoom = true) {
+  if (on && state.plane) planeOff(); // the mirror image is built from the model as built
   state.mirror = on;
   if (on) { state.side = false; $('btn-side').setAttribute('aria-pressed', 'false'); } // the compared structure is model 1 too
   $('btn-mirror').setAttribute('aria-pressed', String(on));
@@ -709,6 +714,7 @@ function showRel() {
 // Show the compared structure to the right of the model, as the 3D build made it (not turned to match).
 function setSide(on, zoom = true) {
   if (on && state.mirror) setMirror(false, false);
+  if (on && state.plane) planeOff();
   state.side = on && !!state.cmp;
   $('btn-side').setAttribute('aria-pressed', String(state.side));
   const old = viewer.getModel(1); // 3Dmol returns the last model for a missing id, so check it is really model 1
@@ -754,8 +760,82 @@ $('cmp-form').addEventListener('submit', async e => {
 });
 $('btn-side').addEventListener('click', () => setSide(!state.side));
 
-// Leaving the Stereo tab takes its model views away: the mirror image and the compared structure.
+// ---- Meso mirror plane (Stereo tab): found in the worker on real coordinates. When the model as built has none, the
+// worker turns single bonds (or tries other conformers) until one shows, and the model slides there; off slides it back.
+let planeBusy = false;
+const PLANE_HOW = {
+  model: '',
+  turned: ' To show it, the model was turned about single bonds, as on the Shape tab. Turning changes the conformation, not the compound.',
+  conformer: ' This is another conformation from the conformer search, not the one built first.',
+};
+function showPlane() {
+  const btn = $('btn-plane'), box = $('plane-note'), p = cur.mplane;
+  btn.hidden = !cur.meso;
+  btn.disabled = planeBusy;
+  btn.setAttribute('aria-pressed', String(state.plane));
+  box.hidden = !planeBusy && !state.plane;
+  box.textContent = planeBusy ? 'Looking for the mirror plane…'
+    : !state.plane ? ''
+    : p ? 'Mirror plane: the see-through plate cuts the molecule into two halves that are mirror images of each other, so the compound is achiral (meso) even though it has stereocenters.'
+      + PLANE_HOW[p.how] + (cur.mring ? ' Textbooks check a ring drawn flat, its average shape; the ring in this model has the plane too.' : '')
+    : 'This compound has a mirror plane in another conformation.'
+      + (cur.mring ? ' For a ring, that is the flat ring the textbook draws: the average of the shapes the ring flips between. No shape this page can reach has it, since ring bonds do not turn.' : '');
+}
+
+$('btn-plane').addEventListener('click', async () => {
+  if (state.plane) return setPlane(false);
+  const mol = cur;
+  if (mol.mplane === undefined) {
+    planeBusy = true; draw();
+    const res = await ask({ plane: true });
+    planeBusy = false;
+    if (res.stale || mol !== cur) return draw(); // another request took over: try again later
+    if (res.error) { mol.mplane = null; mol.mring = false; } else { mol.mplane = res.plane; mol.mring = res.ring; }
+  }
+  setPlane(true);
+});
+
+function setPlane(on) {
+  if (on && state.mirror) setMirror(false, false);
+  if (on && state.side) setSide(false, false);
+  const p = cur.mplane, moved = p && p.how !== 'model';
+  state.plane = on;
+  let view = null;
+  if (on && p) { // look at the plane almost edge-on (turned 30°), so one half sits left of it and its mirror half right
+    const pts = moved ? p.xyz : home3d, g = [0, 1, 2].map(k => pts.reduce((t, v) => t + v[k], 0) / pts.length);
+    const v = viewer.getView(), q0 = v.slice(4, 8), t = 30 * Math.PI / 180, q = qMul(qArc(qRot(q0, p.n), [Math.cos(t), 0, Math.sin(t)]), q0);
+    planeUp = qRot([-q[0], -q[1], -q[2], q[3]], [0, 1, 0]); // the screen's up once the turn ends, for the plate's edges
+    view = [-g[0], -g[1], -g[2], v[3], ...q];
+  }
+  if (moved) morph(on ? home3d : p.xyz, on ? p.xyz : home3d); else draw();
+  if (view) animateView(view);
+}
+// Off at once, without a slide (another view takes over, or the tab changes).
+function planeOff() { state.plane = false; turn(null); }
+
+// The plate: through the plane's point, as wide as the model in the plane plus 1 Å each side. Drawn when the slide ends.
+let planeShapes = [], planeUp = [0, 1, 0];
+function drawPlane() {
+  planeShapes.forEach(x => viewer.removeShape(x));
+  planeShapes = [];
+  const p = cur?.mplane;
+  if (state.tab !== 'stereo' || !state.plane || !p || state.sliding) return;
+  const n = p.n, d3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const pts = viewer.getModel(0).selectedAtoms({}).map(a => [a.x, a.y, a.z]);
+  const g = [0, 1, 2].map(k => pts.reduce((t, v) => t + v[k], 0) / pts.length), off = d3(g.map((x, k) => x - p.c[k]), n);
+  const ctr = g.map((x, k) => x - off * n[k]);
+  const up = planeUp, k = d3(up, n), u = Math.abs(k) < 0.99 ? unit(up.map((x, i) => x - k * n[i])) : unit(cross3(n, [1, 0, 0]));
+  const w = cross3(n, u); // two directions in the plane, one as close to the screen's up as it gets
+  const size = e => 2 * Math.max(...pts.map(v => Math.abs(d3(v.map((x, k) => x - ctr[k]), e)))) + 2;
+  const vec = (e, len) => ({ x: e[0] * len, y: e[1] * len, z: e[2] * len });
+  planeShapes.push(viewer.addBox({ center: { x: ctr[0], y: ctr[1], z: ctr[2] }, dimensions: { w: vec(n, 0.04), h: vec(u, size(u)), d: vec(w, size(w)) },
+    color: tok('--accent'), opacity: 0.4 }));
+}
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+// Leaving the Stereo tab takes its model views away: the mirror image, the compared structure, the mirror plane.
 function leaveStereo() {
+  if (state.plane) planeOff();
   if (state.mirror) setMirror(false); else if (state.side) setSide(false); else draw();
 }
 
@@ -807,6 +887,7 @@ async function run(name) {
     cur = { ...hit, ...res, groups: res.groups.map(g => ({ ...info[g.id], ...g })), flips: {} }; // flips[i]: the other chair of chair i, null if none
     state.hl = state.atom = state.st = state.bond = state.ring = state.chair = -1; state.tries = {}; state.stries = {}; state.ctries = {}; state.flipped = state.sliding = false;
     state.ar = -1; state.ppick = state.npick = null;
+    state.plane = false; planeBusy = false;
     state.cmp = null; state.side = false; cmpSeq++; $('rel').textContent = ''; $('cmp-go').disabled = false; $('btn-side').setAttribute('aria-pressed', 'false');
     morphing++; flipping = -1; // a ring-flip slide or search for the old molecule is over
     if (state.mirror) setMirror(false, false);
