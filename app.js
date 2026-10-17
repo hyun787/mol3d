@@ -1109,6 +1109,7 @@ function rxFrame(q) {
   const v0 = viewer.getView();
   if (q) viewer.setView([...v0.slice(0, 4), ...q]);
   viewer.zoomTo({});
+  viewer.zoom(0.9); // a margin: zoomTo fits the models to the edge
   const to = viewer.getView();
   viewer.setView(v0);
   animateView(to, 600);
@@ -1137,7 +1138,7 @@ function leaveReactions() { rxModels([]); turn(null); draw(); }
 
 // Shapes and tags on the models. Only these shapes are removed here.
 let rxShapes = [];
-const rxTag = (text, at, color = '--accent', offset = { x: 10, y: 10 }) => viewer.addLabel(text, { position: xyz3(at), alignment: 'bottomLeft',
+const rxTag = (text, at, color = '--accent', offset = { x: 10, y: 10 }, alignment = 'bottomLeft') => viewer.addLabel(text, { position: xyz3(at), alignment,
   screenOffset: offset, fontSize: 15, bold: true, fontColor: tok('--bg'), backgroundColor: tok(color), backgroundOpacity: 1, inFront: true });
 function drawRx() {
   rxShapes.forEach(s => viewer.removeShape(s));
@@ -1164,8 +1165,9 @@ function drawRx() {
   if (state.rp === 1 && h && rxShown() && sn1View() === 'products')
     r.products.forEach((p, i) => { if (p.rs) rxTag(p.rs, P3(r.cation.center, i + 1)); });
   if (state.rp === 2 && h && r) { // α and β1, β2 … on the model; a rod joins the picked H and X once they sit anti
-    rxTag('α', P3(h.c), '--fg', { x: -26, y: 8 });
-    r.betas.forEach((b, i) => rxTag(`β${i + 1}`, P3(b), '--fg', { x: 8, y: 8 }));
+    // α up and to the left, β down and to the right: seen down the bond, β sits right behind α
+    rxTag('α', P3(h.c), '--fg', { x: -8, y: 10 }, 'bottomRight');
+    r.betas.forEach((b, i) => rxTag(`β${i + 1}`, P3(b), '--fg', { x: 8, y: -10 }, 'topLeft'));
     const p = e2Pick();
     const anti = p && (!p.q.ring ? true : p.q.now || (p.q.ok && cur.flips[cur.chairs.findIndex(c => c.atoms.includes(h.c) && c.atoms.includes(r.betas[p.row.beta]))]));
     if (anti) rxShapes.push(viewer.addCylinder({ start: xyz3(P3(p.q.h)), end: xyz3(P3(h.x)), radius: 0.06, color: tok('--accent'), opacity: 0.6, dashed: true }));
