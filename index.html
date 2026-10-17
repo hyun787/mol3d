@@ -50,6 +50,13 @@ h1 { margin: 0; font-size: 1.75rem; font-weight: 600; letter-spacing: -0.01em; t
 
 .main { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr) 280px; align-items: start; }
 @media (max-width: 760px) { .main { grid-template-columns: minmax(0, 1fr); } }
+/* Side by side: the control column is as tall as the model and scrolls on its own, so the model stays in view. Its
+   height 0 leaves the row's height to the model; min-height then fills that row. The negative margins give the padding
+   (focus outlines, a scrollbar) room without narrowing the 280px column. Stacked on phones: one page scroll. */
+@media (min-width: 761px) {
+  .panel { align-self: stretch; height: 0; min-height: calc(100% + 8px); overflow-y: auto; overscroll-behavior: contain;
+    margin: -4px -14px -4px -4px; padding: 4px 14px 4px 4px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+}
 .stage-box { display: grid; gap: 6px; min-width: 0; }
 .stage {
   position: relative; width: 100%; aspect-ratio: 1 / 1; max-height: 72vh; max-width: 100%;

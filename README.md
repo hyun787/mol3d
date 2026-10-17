@@ -51,6 +51,7 @@ Type a compound name and see the molecule in 3D, with buttons for the functional
 ## Notes
 
 - A link like `…/mol3d/#caffeine` opens that molecule directly.
+- With the model and the controls side by side (wider than 760 px), the control column is as tall as the model and scrolls on its own, so the model stays in view. On phones the two stack and the page scrolls.
 - PubChem allows about 5 requests per second per source. A whole class behind one school IP can hit that together, so `lookup.js` retries a busy reply up to 3 times after a random wait, which spreads the requests out. Names OPSIN can parse never reach PubChem.
 - Molecules with large fused ring systems (steroids, taxol) take several seconds to build the first time.
 - The 3D build is one conformer, not always the lowest: methylcyclohexane and cis-1,3-dimethylcyclohexane come out with CH₃ axial. Ring flip shows the other chair and says which is more stable. A ring flip takes about a second.
