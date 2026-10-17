@@ -1,6 +1,6 @@
 // Runs the slow chemistry (3D build, group search, ring flips) off the main thread so the page stays responsive.
 import OCL from 'https://cdn.jsdelivr.net/npm/openchemlib@9.25.1/dist/openchemlib.js';
-import { build3D, findGroups, atomInfo, kitParts, stereo, superimposable, newmanBonds, ringAngles, chairs, flipChair } from './chem.js';
+import { build3D, findGroups, atomInfo, kitParts, stereo, superimposable, newmanBonds, ringAngles, chairs, flipChair, polarity, aromaticRings, equivalentH } from './chem.js';
 
 const ready = OCL.Resources.registerFromUrl('https://cdn.jsdelivr.net/npm/openchemlib@9.25.1/dist/resources.json');
 let last = null; // the last molecule built: a ring flip ({flip: chair index}) works on it
@@ -17,6 +17,7 @@ onmessage = async ({ data: { id, smiles, flip } }) => {
     const { mol, stripped, minimized, given } = build3D(OCL, smiles);
     const atoms = atomInfo(mol);
     last = { mol, chairs: chairs(mol, atoms) };
+    const pol = polarity(mol);
     let charge = 0;
     for (let i = 0; i < mol.getAllAtoms(); i++) charge += mol.getAtomCharge(i);
     postMessage({
@@ -31,6 +32,9 @@ onmessage = async ({ data: { id, smiles, flip } }) => {
       bonds: newmanBonds(OCL, mol, atoms),
       rings: ringAngles(mol, atoms),
       chairs: last.chairs,
+      pol: { ...pol, net: [pol.net[0], -pol.net[1], -pol.net[2]] }, // into the molfile's frame, as for flips
+      arom: aromaticRings(mol),
+      nmr: equivalentH(mol),
     });
   } catch (e) {
     postMessage({ id, error: e?.message || String(e) });

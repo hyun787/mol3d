@@ -6,8 +6,11 @@
   build3D now checks the 3D parities against the ones the SMILES set and tries seeds 1–20 when they differ.
   No existing test molecule needed a retry, so earlier results are unchanged.
 
+- UI in Structure tab: Polarity, Aromatic rings (lobes; ring turned edge-on), Equivalent H (letters + 8 colors),
+  guess-first for polar/nonpolar and signal count. Checked in Playwright harness (scratchpad h.mjs): shapes and labels
+  go when leaving the tab, no page errors.
+
 ## Next
-- UI in Structure tab: Polarity group, Aromatic rings group (p-orbital lobes), Equivalent H group, guess-first toggles.
 - Browser check with Playwright harness, README, delete this file, merge to main, check deploy and live site.
 
 ## Decisions / library behavior found
